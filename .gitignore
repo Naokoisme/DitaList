@@ -1,0 +1,16 @@
+node_modules/
+dist/
+release/
+reports/
+reference/
+tools/
+.cache/
+.tmp/
+data/
+*.log
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+*.jks
+*.keystore
