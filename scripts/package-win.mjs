@@ -1,0 +1,123 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const branch = execFileSync("git", ["branch", "--show-current"], {
+  cwd: root,
+  encoding: "utf8",
+}).trim();
+const dirty = execFileSync("git", ["status", "--porcelain"], {
+  cwd: root,
+  encoding: "utf8",
+}).trim();
+if (branch !== "main" || dirty)
+  throw new Error("便携包必须从干净的本地 main 构建");
+const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
+  cwd: root,
+  encoding: "utf8",
+}).trim();
+const output = path.join(root, "release", "本地清单");
+try {
+  await fs.access(output);
+  throw new Error(
+    `交付目录已存在：${output}。先核验并归档上一包，脚本不会覆盖。`,
+  );
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+await fs.access(path.join(root, "dist", "index.html"));
+await fs.mkdir(output, { recursive: true });
+const runtime = path.join(root, "node_modules", "electron", "dist");
+await fs.cp(runtime, output, {
+  recursive: true,
+  filter: (source) => path.basename(source) !== "default_app.asar",
+});
+await fs.rename(
+  path.join(output, "electron.exe"),
+  path.join(output, "本地清单.exe"),
+);
+const application = path.join(output, "resources", "app");
+await fs.mkdir(application, { recursive: true });
+await fs.cp(path.join(root, "dist"), path.join(application, "dist"), {
+  recursive: true,
+});
+await fs.cp(path.join(root, "electron"), path.join(application, "electron"), {
+  recursive: true,
+});
+await fs.writeFile(
+  path.join(application, "package.json"),
+  JSON.stringify(
+    {
+      name: "dida-local",
+      productName: "本地清单",
+      version: "0.0.0",
+      main: "electron/main.cjs",
+    },
+    null,
+    2,
+  ),
+  "utf8",
+);
+const executable = path.join(output, "本地清单.exe");
+const hash = createHash("sha256")
+  .update(await fs.readFile(executable))
+  .digest("hex");
+const info = {
+  product: "本地清单",
+  sourceSha,
+  builtAt: new Date().toISOString(),
+  executable,
+  executableSha256: hash,
+  defaultData: "%APPDATA%\\DidaLocal\\data\\database.json",
+  cloud: false,
+};
+await fs.writeFile(
+  path.join(output, "build-info.json"),
+  JSON.stringify(info, null, 2),
+  "utf8",
+);
+await fs.writeFile(
+  path.join(output, "使用说明.txt"),
+  "双击「本地清单.exe」启动。\r\n任务保存在 %APPDATA%\\DidaLocal\\data，退出和重新打开后继续保留。\r\n备份请使用程序设置中的导出功能；导入时合并任务并保留已有内容。\r\n程序无云服务器，不自动在电脑和手机之间同步。\r\n关闭窗口会退出程序，退出后不会发送提醒。\r\n",
+  "utf8",
+);
+const files = [];
+async function inventory(directory) {
+  for (const item of (
+    await fs.readdir(directory, { withFileTypes: true })
+  ).sort((a, b) => a.name.localeCompare(b.name))) {
+    const target = path.join(directory, item.name);
+    if (item.isDirectory()) await inventory(target);
+    else if (
+      item.name !== "build-info.json" &&
+      item.name !== "files.sha256.json"
+    ) {
+      const bytes = await fs.readFile(target);
+      files.push({
+        path: path.relative(output, target).replaceAll("\\", "/"),
+        bytes: bytes.length,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      });
+    }
+  }
+}
+await inventory(output);
+info.payloadSha256 = createHash("sha256")
+  .update(files.map((file) => `${file.path}\0${file.sha256}\n`).join(""))
+  .digest("hex");
+info.fileCount = files.length;
+info.totalBytes = files.reduce((sum, file) => sum + file.bytes, 0);
+await fs.writeFile(
+  path.join(output, "files.sha256.json"),
+  JSON.stringify(files, null, 2),
+  "utf8",
+);
+await fs.writeFile(
+  path.join(output, "build-info.json"),
+  JSON.stringify(info, null, 2),
+  "utf8",
+);
+console.log(JSON.stringify(info, null, 2));
