@@ -432,7 +432,9 @@ try {
       const mainSource = await fs.readFile(path.join(applicationRoot, 'electron', 'main.cjs'), 'utf8');
       assert.match(mainSource, /DIDA_LOCAL_HEADLESS/, '测试前必须存在专门的隐藏窗口入口');
       const dataDir = path.join(reportDir, 'electron-isolated-data');
-      const environment = { ...process.env, DIDA_LOCAL_HEADLESS: '1', DIDA_LOCAL_DATA_DIR: dataDir };
+      const desktopShortcutDir = path.join(reportDir, 'desktop-shortcut');
+      await fs.mkdir(desktopShortcutDir, { recursive: true });
+      const environment = { ...process.env, DIDA_LOCAL_HEADLESS: '1', DIDA_LOCAL_DATA_DIR: dataDir, DIDA_LOCAL_DESKTOP_DIR: desktopShortcutDir };
       delete environment.ELECTRON_RUN_AS_NODE;
       const options = { executablePath: packagedExecutable || path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe'), args: packagedExecutable ? [] : [root], env: environment, timeout: 60000 };
       report.electron = { executable: options.executablePath, args: options.args, dataDir, startsHidden: true };
@@ -459,6 +461,13 @@ try {
         app = await launch(); page = await app.firstWindow(); page.setDefaultTimeout(10000);
         page.on('pageerror', error => report.pageErrors.push(error.stack || error.message));
         await page.locator('.app-shell').waitFor();
+        const shortcut = await page.evaluate(() => window.didaLocal.createDesktopShortcut());
+        assert.equal(path.basename(shortcut.path), 'DitaList.lnk');
+        assert.ok((await fs.stat(shortcut.path)).isFile(), '桌面快捷方式必须创建为 .lnk 文件');
+        assert.equal(await page.evaluate(() => window.didaLocal.getDesktopShortcut()), true);
+        await page.evaluate(() => window.didaLocal.removeDesktopShortcut());
+        assert.equal(await page.evaluate(() => window.didaLocal.getDesktopShortcut()), false);
+        report.electron.desktopShortcut = { created: true, removed: true, isolatedDirectory: desktopShortcutDir };
         const windowControlButtons = page.locator('.window-controls button');
         assert.equal(await windowControlButtons.count(), 3, '桌面窗口必须显示三个窗口控件');
         assert.deepEqual(await windowControlButtons.evaluateAll(buttons => buttons.map(button => getComputedStyle(button).getPropertyValue('-webkit-app-region'))), ['no-drag', 'no-drag', 'no-drag'], '窗口控件不能位于拖拽区域');
@@ -520,9 +529,9 @@ try {
         assert.ok((await Promise.all(corruptFiles.map(name => fs.readFile(path.join(dataDir, name), 'utf8')))).includes(corruptBytes));
         await page.locator('.rail-bottom .rail-button[aria-label="设置"]').click();
         await page.getByLabel('默认日期').selectOption('tomorrow');
-        await page.locator('.shortcut-capture').click();
-        await page.locator('.shortcut-capture').press('Control+Shift+J');
-        assert.equal(await page.locator('.shortcut-capture').innerText(), 'Ctrl+Shift+J');
+        await page.locator('.shortcut-capture').first().click();
+        await page.locator('.shortcut-capture').first().press('Control+Shift+J');
+        assert.equal(await page.locator('.shortcut-capture').first().innerText(), 'Ctrl+Shift+J');
         await page.getByRole('button', { name: '关闭设置' }).click();
         await saved();
         await page.evaluate(() => window.didaLocal.openFloating());

@@ -307,6 +307,47 @@ function setFloatingShortcut(shortcut) {
   }
 }
 
+function desktopShortcutPath() {
+  const override = process.env.DIDA_LOCAL_DESKTOP_DIR;
+  const desktop =
+    override && path.isAbsolute(override) ? override : app.getPath("desktop");
+  return path.join(desktop, "DitaList.lnk");
+}
+
+function desktopShortcutDetails() {
+  const target = process.execPath;
+  return {
+    target,
+    args: process.defaultApp ? JSON.stringify(app.getAppPath()) : "",
+    cwd: path.dirname(target),
+    description: "DitaList 本地任务管理",
+    icon: path.join(distDirectory, "icon.ico"),
+    iconIndex: 0,
+    appUserModelId: "Naoko.DitaList",
+  };
+}
+
+async function createDesktopShortcut() {
+  if (process.platform !== "win32")
+    throw new Error("桌面快捷方式目前只支持 Windows");
+  const shortcut = desktopShortcutPath();
+  await fs.mkdir(path.dirname(shortcut), { recursive: true });
+  let operation = "create";
+  try {
+    await fs.access(shortcut);
+    operation = "update";
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const created = shell.writeShortcutLink(
+    shortcut,
+    operation,
+    desktopShortcutDetails(),
+  );
+  if (!created) throw new Error("Windows 没有接受桌面快捷方式写入");
+  return { path: shortcut };
+}
+
 function registerIpc() {
   const handle = (name, callback) =>
     ipcMain.handle(name, async (event, ...args) => {
@@ -391,6 +432,21 @@ function registerIpc() {
     if (typeof shortcut !== "string" || shortcut.length > 100)
       throw new Error("快捷键格式无效");
     return setFloatingShortcut(shortcut);
+  });
+  handle("shortcut:get-desktop", async () => {
+    try {
+      await fs.access(desktopShortcutPath());
+      return true;
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  });
+  handle("shortcut:create-desktop", createDesktopShortcut);
+  handle("shortcut:remove-desktop", async () => {
+    await fs.unlink(desktopShortcutPath()).catch((error) => {
+      if (error.code !== "ENOENT") throw error;
+    });
   });
   ipcMain.on("window:action", (event, action) => {
     try {

@@ -2522,6 +2522,37 @@ function SettingsDialog({
 }) {
   const [tab, setTab] = useState("general");
   const [capturingShortcut, setCapturingShortcut] = useState(false);
+  const [desktopShortcutStatus, setDesktopShortcutStatus] = useState<
+    "checking" | "missing" | "exists" | "error"
+  >("checking");
+  useEffect(() => {
+    if (info?.kind !== "desktop" || !window.didaLocal?.getDesktopShortcut) {
+      setDesktopShortcutStatus("missing");
+      return;
+    }
+    void window.didaLocal
+      .getDesktopShortcut()
+      .then((exists) => setDesktopShortcutStatus(exists ? "exists" : "missing"))
+      .catch(() => setDesktopShortcutStatus("error"));
+  }, [info?.kind]);
+
+  async function createDesktopShortcut() {
+    try {
+      await window.didaLocal?.createDesktopShortcut();
+      setDesktopShortcutStatus("exists");
+    } catch {
+      setDesktopShortcutStatus("error");
+    }
+  }
+
+  async function removeDesktopShortcut() {
+    try {
+      await window.didaLocal?.removeDesktopShortcut();
+      setDesktopShortcutStatus("missing");
+    } catch {
+      setDesktopShortcutStatus("error");
+    }
+  }
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="settings-dialog" onMouseDown={(e) => e.stopPropagation()}>
@@ -2694,6 +2725,38 @@ function SettingsDialog({
               <p className="setting-caption">
                 单击右下角托盘图标或按快捷键打开悬浮窗。输入中的日期和时间会覆盖默认日期。
               </p>
+              {info?.kind === "desktop" && (
+                <>
+                  <div className="setting-row">
+                    <span>桌面快捷方式</span>
+                    <div className="shortcut-controls">
+                      <button
+                        type="button"
+                        className="shortcut-capture"
+                        onClick={() => void createDesktopShortcut()}
+                        disabled={desktopShortcutStatus === "checking"}
+                      >
+                        {desktopShortcutStatus === "exists"
+                          ? "重新创建"
+                          : "创建桌面图标"}
+                      </button>
+                      {desktopShortcutStatus === "exists" && (
+                        <button
+                          type="button"
+                          className="text-button"
+                          onClick={() => void removeDesktopShortcut()}
+                        >
+                          移除
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="setting-caption">
+                    快捷方式会放在 Windows 桌面，使用 DitaList 图标启动当前程序。
+                    {desktopShortcutStatus === "error" && " 最近一次操作没有成功。"}
+                  </p>
+                </>
+              )}
               <div className="setting-subheading">已归档清单</div>
               {data.lists
                 .filter((l) => l.archived)

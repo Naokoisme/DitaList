@@ -123,6 +123,9 @@ export interface DesktopBridge {
   revealData(): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   setFloatingShortcut(shortcut: string): Promise<boolean>;
+  getDesktopShortcut(): Promise<boolean>;
+  createDesktopShortcut(): Promise<{ path: string }>;
+  removeDesktopShortcut(): Promise<void>;
   windowAction(action: "minimize" | "maximize" | "close"): void;
   openFloating(): void;
   closeFloating(): void;

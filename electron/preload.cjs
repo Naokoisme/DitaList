@@ -9,6 +9,9 @@ contextBridge.exposeInMainWorld("didaLocal", {
   notify: (title, body) => ipcRenderer.invoke("notify", title, body),
   setFloatingShortcut: (shortcut) =>
     ipcRenderer.invoke("settings:set-floating-shortcut", shortcut),
+  getDesktopShortcut: () => ipcRenderer.invoke("shortcut:get-desktop"),
+  createDesktopShortcut: () => ipcRenderer.invoke("shortcut:create-desktop"),
+  removeDesktopShortcut: () => ipcRenderer.invoke("shortcut:remove-desktop"),
   windowAction: (action) => ipcRenderer.send("window:action", action),
   openFloating: () => ipcRenderer.send("floating:show"),
   closeFloating: () => ipcRenderer.send("floating:close"),
