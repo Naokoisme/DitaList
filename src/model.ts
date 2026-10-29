@@ -126,6 +126,15 @@ export interface AgentDocumentInfo {
   httpUrl?: string;
   content: string;
 }
+export interface FloatingState {
+  theme: "light" | "dark" | "system";
+  accent: string;
+  hasReminder: boolean;
+  todayCount: number;
+  expanded: boolean;
+  anchorX: "left" | "right";
+  anchorY: "top" | "bottom";
+}
 export interface DesktopBridge {
   load(): Promise<{ data: AppData | null; info: StorageInfo }>;
   save(data: AppData): Promise<void>;
@@ -137,6 +146,15 @@ export interface DesktopBridge {
   openAgentDocumentDirectory(): Promise<{ path: string }>;
   notify(title: string, body: string): Promise<void>;
   setFloatingShortcut(shortcut: string): Promise<boolean>;
+  getFloatingVisible(): Promise<boolean>;
+  setFloatingVisible(visible: boolean): Promise<boolean>;
+  onFloatingVisibilityChanged(listener: (visible: boolean) => void): () => void;
+  resizeFloating(width: number, height: number): void;
+  moveFloating(dx: number, dy: number): void;
+  getFloatingState(): Promise<FloatingState>;
+  onFloatingStateChanged(listener: (state: FloatingState) => void): () => void;
+  updateFloatingStatus(status: Omit<FloatingState, "expanded" | "anchorX" | "anchorY">): void;
+  setFloatingExpanded(expanded: boolean): void;
   getDesktopShortcut(): Promise<boolean>;
   createDesktopShortcut(): Promise<{ path: string }>;
   removeDesktopShortcut(): Promise<void>;
@@ -144,8 +162,9 @@ export interface DesktopBridge {
   openFloating(): void;
   closeFloating(): void;
   openMain(): void;
-  submitQuickAdd(text: string): void;
-  onQuickAdd(listener: (text: string) => void): () => void;
+  submitQuickAdd(text: string): Promise<void>;
+  completeQuickAdd(requestId: string, error?: string): void;
+  onQuickAdd(listener: (text: string, requestId: string) => void): () => void;
   onExternalData(listener: (payload: {
     data: AppData;
     reason: string;

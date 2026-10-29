@@ -279,6 +279,7 @@ export default function App() {
   const loaded = useRef(false);
   const latestData = useRef<AppData | null>(null);
   const saveRevision = useRef(0);
+  const pendingQuickAdds = useRef(new Map<string, string>());
   const reviewedAgentIds = useRef(new Set<string>());
   latestData.current = data;
   const [boot, setBoot] = useState(0);
@@ -328,12 +329,24 @@ export default function App() {
   useEffect(() => {
     if (!data || !loaded.current) return;
     const revision = ++saveRevision.current;
+    const quickAdds = [...pendingQuickAdds.current].filter(([taskId]) =>
+      data.tasks.some((task) => task.id === taskId),
+    );
+    const finishQuickAdds = (error?: string) => {
+      for (const [taskId, requestId] of quickAdds) {
+        if (pendingQuickAdds.current.get(taskId) !== requestId) continue;
+        pendingQuickAdds.current.delete(taskId);
+        window.didaLocal?.completeQuickAdd(requestId, error);
+      }
+    };
     setSaveStatus("saving");
     saveData(data)
       .then(() => {
         if (revision === saveRevision.current) setSaveStatus("saved");
+        finishQuickAdds();
       })
       .catch((e) => {
+        finishQuickAdds("任务已放入主窗口，但保存失败。请打开 DitaList 检查并重试保存。");
         if (revision === saveRevision.current) {
           setSaveStatus("error");
           setToast(`保存失败：${e instanceof Error ? e.message : String(e)}`);
@@ -487,7 +500,7 @@ export default function App() {
   const reminded = useRef(new Set<string>());
   useEffect(() => {
     if (
-      !data?.settings.notifications ||
+      !data ||
       !window.didaLocal ||
       info?.kind === "android"
     )
@@ -504,8 +517,10 @@ export default function App() {
     const tick = () => {
       const current = latestData.current;
       if (!current) return;
+      let hasReminder = false;
       for (const task of current.tasks) {
         if (
+          !current.settings.notifications ||
           task.deletedAt ||
           task.completedAt ||
           !task.dueDate ||
@@ -517,6 +532,7 @@ export default function App() {
           new Date(`${task.dueDate}T${task.time}:00`).getTime() -
           offsets[task.reminder] * 60000;
         const key = `${task.id}:${when}`;
+        if (Date.now() >= when) hasReminder = true;
         if (
           Date.now() >= when &&
           Date.now() - when < 60000 &&
@@ -529,11 +545,19 @@ export default function App() {
           );
         }
       }
+      window.didaLocal?.updateFloatingStatus?.({
+        theme: current.settings.theme,
+        accent: current.settings.accent,
+        hasReminder,
+        todayCount: current.tasks.filter((task) =>
+          !task.deletedAt && !task.completedAt && task.dueDate && task.dueDate <= localDate(),
+        ).length,
+      });
     };
     tick();
     const t = setInterval(tick, 10000);
     return () => clearInterval(t);
-  }, [data?.settings.notifications, info?.kind]);
+  }, [data, info?.kind]);
 
   const selected = data?.tasks.find((t) => t.id === selectedId) || null;
   const active =
@@ -659,20 +683,32 @@ export default function App() {
   }
   useEffect(() => {
     if (!data || !window.didaLocal?.onQuickAdd) return;
-    return window.didaLocal.onQuickAdd((text) => {
-      const list = data.lists.find(
-        (item) => item.id === data.settings.floatingDefaultListId,
-      );
-      const listId = list && !list.archived ? list.id : "inbox";
-      if (
-        addTaskFromInput(text, {
+    return window.didaLocal.onQuickAdd((text, requestId) => {
+      try {
+        const list = data.lists.find(
+          (item) => item.id === data.settings.floatingDefaultListId,
+        );
+        const listId = list && !list.archived ? list.id : "inbox";
+        const taskId = addTaskFromInput(text, {
           listId,
           defaultDueDate: floatingDefaultDueDate(
             data.settings.floatingDefaultDate,
           ),
-        })
-      )
-        setToast("已从悬浮窗添加任务");
+        });
+        if (taskId) {
+          pendingQuickAdds.current.set(taskId, requestId);
+          setToast("已从悬浮球添加任务");
+        } else {
+          window.didaLocal?.completeQuickAdd(requestId, "请写下任务内容");
+        }
+      } catch (error) {
+        window.didaLocal?.completeQuickAdd(
+          requestId,
+          error instanceof Error && (error.name === "ZodError" || error.message.startsWith("任务格式不正确："))
+            ? "任务格式无效，请检查日期，或将每个标签缩短到 200 字以内。"
+            : "暂时无法添加任务，请打开 DitaList 检查。",
+        );
+      }
     });
   }, [data, currentListId, view]);
   function trashTask(id: string) {
@@ -3581,11 +3617,12 @@ function ListDialog({
                   type="button"
                   key={c}
                   aria-label={`颜色 ${c}`}
-                  className={color === c ? "selected" : ""}
+                  aria-pressed={color.toLowerCase() === c}
+                  className={color.toLowerCase() === c ? "selected" : ""}
                   style={{ background: c }}
                   onClick={() => setColor(c)}
                 >
-                  {color === c && <Check size={15} />}
+                  {color.toLowerCase() === c && <Check size={14} strokeWidth={2.5} />}
                 </button>
               ))}
             </div>
@@ -3804,6 +3841,9 @@ function SettingsDialog({
 }) {
   const [tab, setTab] = useState<string>(initialTab);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
+  const [floatingVisible, setFloatingVisible] = useState<boolean | null>(null);
+  const [changingFloating, setChangingFloating] = useState(false);
+  const [floatingError, setFloatingError] = useState("");
   const [desktopShortcutStatus, setDesktopShortcutStatus] = useState<
     "checking" | "missing" | "exists" | "error"
   >("checking");
@@ -3812,6 +3852,35 @@ function SettingsDialog({
   const [agentNotice, setAgentNotice] = useState(
     "你可以现在复制配置说明发给 Agent，也可以稍后配置；说明文案会一直保留在这里。",
   );
+  useEffect(() => {
+    const bridge = window.didaLocal;
+    if (info?.kind !== "desktop" || !bridge?.getFloatingVisible) return;
+    let canceled = false;
+    let receivedEvent = false;
+    const unsubscribe = bridge.onFloatingVisibilityChanged((visible) => {
+      receivedEvent = true;
+      if (!canceled) setFloatingVisible(visible);
+    });
+    void bridge.getFloatingVisible().then((visible) => {
+      if (!canceled && !receivedEvent) setFloatingVisible(visible);
+    }).catch(() => {
+      if (!canceled) setFloatingError("无法读取悬浮球状态，请重新打开设置。");
+    });
+    return () => { canceled = true; unsubscribe(); };
+  }, [info?.kind]);
+
+  async function toggleFloating(visible: boolean) {
+    if (!window.didaLocal || changingFloating) return;
+    setChangingFloating(true);
+    setFloatingError("");
+    try {
+      setFloatingVisible(await window.didaLocal.setFloatingVisible(visible));
+    } catch (error) {
+      setFloatingError(`悬浮球切换失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setChangingFloating(false);
+    }
+  }
   useEffect(() => {
     if (info?.kind !== "desktop" || !window.didaLocal?.getDesktopShortcut) {
       setDesktopShortcutStatus("missing");
@@ -4015,7 +4084,24 @@ function SettingsDialog({
               <p className="setting-caption">
                 Windows 提醒需要应用保持运行。设备休眠或退出应用时不会触发。
               </p>
-              <div className="setting-subheading">桌面悬浮窗</div>
+              <div className="setting-subheading">桌面悬浮球</div>
+              {info?.kind === "desktop" && (
+                <>
+                  <label className="setting-row">
+                    <span>显示悬浮球</span>
+                    <input
+                      type="checkbox"
+                      checked={floatingVisible === true}
+                      disabled={floatingVisible === null || changingFloating}
+                      onChange={(event) => void toggleFloating(event.target.checked)}
+                    />
+                  </label>
+                  {floatingError && <p className="form-error" role="alert">{floatingError}</p>}
+                  <p className="setting-caption">
+                    点击小球快速记录，拖动调整位置。数字显示“今天”的未完成任务数（含逾期）。
+                  </p>
+                </>
+              )}
               <div className="setting-row setting-shortcut-row">
                 <span>呼出快捷键</span>
                 <div className="shortcut-controls">
@@ -4085,7 +4171,7 @@ function SettingsDialog({
                 />
               </div>
               <p className="setting-caption">
-                单击右下角托盘图标或按快捷键打开悬浮窗。输入中的日期和时间会覆盖默认日期。
+                托盘切换悬浮球，快捷键直接展开输入框。输入中的日期和时间会覆盖默认日期。
               </p>
               {info?.kind === "desktop" && (
                 <>
@@ -4165,11 +4251,12 @@ function SettingsDialog({
                   <button
                     key={c}
                     aria-label={`主题色 ${c}`}
+                    aria-pressed={data.settings.accent.toLowerCase() === c}
                     style={{ background: c }}
-                    className={data.settings.accent === c ? "selected" : ""}
+                    className={data.settings.accent.toLowerCase() === c ? "selected" : ""}
                     onClick={() => onChange({ accent: c })}
                   >
-                    {data.settings.accent === c && <Check size={16} />}
+                    {data.settings.accent.toLowerCase() === c && <Check size={14} strokeWidth={2.5} />}
                   </button>
                 ))}
               </div>

@@ -53,6 +53,11 @@ let floatingWindow;
 let tray;
 let floatingReady = false;
 let floatingRequested = false;
+let floatingVisibilityRequest = null;
+let floatingBounds = null;
+let floatingState = { theme: "light", accent: "#4772fa", hasReminder: false, todayCount: 0, expanded: false, anchorX: "right", anchorY: "bottom" };
+let pendingQuickAdd = null;
+let quickAddReceiver = null;
 let activeFloatingShortcut = null;
 let quitting = false;
 let mcpBridge;
@@ -609,56 +614,193 @@ function showMainWindow() {
   mainWindow.focus();
 }
 
-function placeFloatingWindow() {
-  if (!floatingWindow || floatingWindow.isDestroyed()) return;
-  const display = screen.getPrimaryDisplay();
-  const workArea = display.workArea;
-  const [width, height] = floatingWindow.getSize();
-  floatingWindow.setPosition(
-    Math.round(workArea.x + workArea.width - width - 20),
-    Math.round(workArea.y + workArea.height - height - 20),
-  );
+function clampFloatingBounds(bounds, display = screen.getDisplayMatching(bounds)) {
+  const area = display.workArea;
+  const width = Math.min(bounds.width, area.width);
+  const height = Math.min(bounds.height, area.height);
+  return {
+    x: Math.round(Math.max(area.x, Math.min(bounds.x, area.x + area.width - width))),
+    y: Math.round(Math.max(area.y, Math.min(bounds.y, area.y + area.height - height))),
+    width,
+    height,
+  };
 }
 
-function showFloatingWindow() {
-  if (!floatingWindow || floatingWindow.isDestroyed()) createFloatingWindow();
-  floatingRequested = true;
-  if (!floatingReady || !floatingWindow || floatingWindow.isDestroyed()) return;
+function placeFloatingWindow() {
+  if (!floatingWindow || floatingWindow.isDestroyed()) return;
+  floatingWindow.setBounds(clampFloatingBounds(floatingWindow.getBounds()));
+  floatingBounds = floatingWindow.getBounds();
+  updateFloatingAnchor(floatingBounds);
+}
+
+function updateFloatingAnchor(bounds) {
+  if (floatingState.expanded || bounds.width !== 68 || bounds.height !== 68) return;
+  const area = screen.getDisplayMatching(bounds).workArea;
+  const left = bounds.x - area.x, right = area.x + area.width - bounds.x - bounds.width;
+  const above = bounds.y - area.y, below = area.y + area.height - bounds.y - bounds.height;
+  updateFloatingState({
+    anchorX: left >= 512 || (right < 512 && left >= right) ? "right" : "left",
+    anchorY: above >= 252 || (below < 252 && above >= below) ? "bottom" : "top",
+  });
+}
+
+function resizeFloatingWindow(width, height) {
+  if (!floatingWindow || floatingWindow.isDestroyed()) return;
+  if (!floatingWindow.isVisible() && !floatingRequested && (width !== 68 || height !== 68)) return;
+  const bounds = floatingWindow.getBounds();
+  floatingWindow.setBounds(clampFloatingBounds({
+    x: floatingState.anchorX === "right" ? bounds.x + bounds.width - width : bounds.x,
+    y: floatingState.anchorY === "bottom" ? bounds.y + bounds.height - height : bounds.y,
+    width,
+    height,
+  }, screen.getDisplayMatching(bounds)));
+  floatingBounds = floatingWindow.getBounds();
+  updateFloatingAnchor(floatingBounds);
+}
+
+function moveFloatingWindow(dx, dy) {
+  if (!floatingWindow || floatingWindow.isDestroyed()) return;
+  const bounds = floatingWindow.getBounds();
+  // 拖动越过屏幕边缘时，以指针所在屏幕为目标，避免每次夹紧都把小增量推回原屏。
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  floatingWindow.setBounds(clampFloatingBounds({ ...bounds, x: bounds.x + dx, y: bounds.y + dy }, display));
+  floatingBounds = floatingWindow.getBounds();
+  updateFloatingAnchor(floatingBounds);
+}
+
+function updateFloatingState(patch) {
+  if (Object.keys(patch).every((key) => floatingState[key] === patch[key])) return;
+  floatingState = { ...floatingState, ...patch };
+  if (floatingWindow && !floatingWindow.isDestroyed() && !floatingWindow.webContents.isDestroyed())
+    floatingWindow.webContents.send("floating:state-changed", { ...floatingState });
+}
+
+function getFloatingVisible() {
+  return Boolean(floatingWindow && !floatingWindow.isDestroyed() && floatingWindow.isVisible());
+}
+
+function notifyFloatingVisibility() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.webContents.isDestroyed()) return;
+  mainWindow.webContents.send("floating:visibility-changed", getFloatingVisible());
+}
+
+function finishFloatingVisibilityRequest(error) {
+  const request = floatingVisibilityRequest;
+  floatingVisibilityRequest = null;
+  if (!request) return;
+  if (error) request.reject(error);
+  else request.resolve(getFloatingVisible());
+}
+
+function hideFloatingWindow() {
+  floatingRequested = false;
+  updateFloatingState({ expanded: false });
+  if (floatingWindow && !floatingWindow.isDestroyed()) floatingWindow.hide();
+  resizeFloatingWindow(68, 68);
+  finishFloatingVisibilityRequest();
+  return getFloatingVisible();
+}
+
+function showReadyFloatingWindow() {
   placeFloatingWindow();
   floatingWindow.show();
   floatingWindow.focus();
+  finishFloatingVisibilityRequest();
+}
+
+async function setFloatingVisible(visible, expanded = false) {
+  if (!visible) return hideFloatingWindow();
+  updateFloatingState({ expanded });
+  floatingRequested = true;
+  if (getFloatingVisible()) {
+    floatingWindow.focus();
+    return getFloatingVisible();
+  }
+  if (floatingVisibilityRequest) return floatingVisibilityRequest.promise;
+  let resolve, reject;
+  const promise = new Promise((accept, fail) => {
+    resolve = accept;
+    reject = fail;
+  });
+  floatingVisibilityRequest = { promise, resolve, reject };
+  try {
+    if (!floatingWindow || floatingWindow.isDestroyed()) createFloatingWindow();
+    if (floatingReady) showReadyFloatingWindow();
+  } catch (error) {
+    floatingRequested = false;
+    finishFloatingVisibilityRequest(error);
+  }
+  return promise;
+}
+
+function showFloatingWindow() {
+  void setFloatingVisible(true, true).catch((error) =>
+    console.error("Floating window could not be shown", error),
+  );
 }
 
 function toggleFloatingWindow() {
-  if (floatingWindow?.isVisible()) {
-    floatingRequested = false;
-    floatingWindow.hide();
+  if (getFloatingVisible() || floatingRequested) {
+    hideFloatingWindow();
   } else {
-    showFloatingWindow();
+    void setFloatingVisible(true).catch((error) =>
+      console.error("Floating ball could not be shown", error),
+    );
   }
 }
 
-function sendQuickAddToMain(text) {
-  showMainWindow();
-  const send = () => mainWindow?.webContents.send("quick-add", text);
-  if (mainWindow?.webContents.isLoading())
-    mainWindow.webContents.once("did-finish-load", send);
-  else send();
+function finishQuickAdd(error) {
+  const request = pendingQuickAdd;
+  if (!request) return;
+  pendingQuickAdd = null;
+  clearTimeout(request.timer);
+  if (error) request.reject(error);
+  else {
+    updateFloatingState({ expanded: false });
+    request.resolve();
+  }
+}
+
+function sendQuickAddToMain() {
+  if (!pendingQuickAdd || pendingQuickAdd.sent || !mainWindow || mainWindow.isDestroyed() ||
+      quickAddReceiver !== mainWindow.webContents) return;
+  pendingQuickAdd.sent = true;
+  mainWindow.webContents.send("quick-add", pendingQuickAdd.text, pendingQuickAdd.id);
+}
+
+function submitQuickAdd(text) {
+  if (pendingQuickAdd) throw new Error("上一条任务仍在等待保存确认，请稍候。");
+  return new Promise((resolve, reject) => {
+    pendingQuickAdd = {
+      id: randomUUID(), text, resolve, reject, sent: false,
+      timer: setTimeout(() => finishQuickAdd(new Error("任务保存结果尚未确认，请先查看清单，避免重复添加。")), 15000),
+    };
+    try {
+      if (!mainWindow || mainWindow.isDestroyed()) createWindow(false);
+      sendQuickAddToMain();
+    } catch (error) {
+      finishQuickAdd(error);
+    }
+  });
 }
 
 function createFloatingWindow() {
   floatingReady = false;
-  floatingWindow = new BrowserWindow({
-    width: 390,
-    height: 190,
-    minWidth: 340,
-    minHeight: 170,
+  const primary = screen.getPrimaryDisplay();
+  const bounds = floatingBounds
+    ? clampFloatingBounds({ x: floatingBounds.x + floatingBounds.width - 68, y: floatingBounds.y + floatingBounds.height - 68, width: 68, height: 68 })
+    : clampFloatingBounds({ x: primary.workArea.x + primary.workArea.width - 88, y: primary.workArea.y + primary.workArea.height - 88, width: 68, height: 68 }, primary);
+  const window = new BrowserWindow({
+    ...bounds,
+    minWidth: 68,
+    minHeight: 68,
     resizable: false,
     frame: false,
+    transparent: true,
     show: false,
     alwaysOnTop: true,
     skipTaskbar: true,
-    backgroundColor: "#fff7f0",
+    backgroundColor: "#00000000",
     title: "DitaList 快速添加",
     icon: path.join(distDirectory, "icon.png"),
     webPreferences: {
@@ -669,16 +811,58 @@ function createFloatingWindow() {
       webSecurity: true,
     },
   });
-  floatingWindow.once("ready-to-show", () => {
+  floatingWindow = window;
+  floatingBounds = bounds;
+  updateFloatingAnchor(bounds);
+  let readyToShow = false;
+  let loaded = false;
+  const failed = (error) => {
+    if (floatingWindow !== window || window.isDestroyed()) return;
+    floatingRequested = false;
+    finishFloatingVisibilityRequest(error);
+    console.error("Floating window failed to load or show", error);
+    window.destroy();
+  };
+  const showWhenReady = () => {
+    if (floatingWindow !== window || window.isDestroyed() || !readyToShow || !loaded) return;
     floatingReady = true;
-    if (floatingRequested) showFloatingWindow();
+    if (floatingRequested) {
+      try {
+        showReadyFloatingWindow();
+      } catch (error) {
+        failed(error);
+      }
+    }
+  };
+  // 首次显示同时等待页面加载成功和首帧，失败时不能把显示意图当作真实状态。
+  window.once("ready-to-show", () => {
+    readyToShow = true;
+    showWhenReady();
   });
-  floatingWindow.on("closed", () => {
+  window.on("show", notifyFloatingVisibility);
+  window.on("hide", () => {
+    if (floatingWindow !== window) return;
+    floatingRequested = false;
+    updateFloatingState({ expanded: false });
+    notifyFloatingVisibility();
+  });
+  window.on("close", () => {
+    if (!window.isDestroyed()) floatingBounds = window.getBounds();
+  });
+  window.on("closed", () => {
+    if (floatingWindow !== window) return;
     floatingWindow = null;
     floatingReady = false;
     floatingRequested = false;
+    updateFloatingState({ expanded: false });
+    finishQuickAdd(new Error("悬浮窗已关闭，任务保存结果尚未确认，请先查看清单。"));
+    finishFloatingVisibilityRequest();
+    notifyFloatingVisibility();
   });
-  floatingWindow.loadURL("dida-local://app/floating.html");
+  void window.loadURL("dida-local://app/floating.html").then(() => {
+    loaded = true;
+    showWhenReady();
+  }).catch(failed);
 }
 
 function quitApplication() {
@@ -874,6 +1058,15 @@ function registerIpc() {
       assertSender(event);
       return callback(...args);
     });
+  const listen = (name, assertSource, callback) =>
+    ipcMain.on(name, (event, ...args) => {
+      try {
+        assertSource(event);
+        callback(...args);
+      } catch (error) {
+        console.error(`${name} rejected`, error.message || error);
+      }
+    });
   handle("data:load", () => loadDocument());
   handle("data:save", (value) => enqueueDocumentSave(value));
   handle("data:export", async (value) => {
@@ -941,6 +1134,53 @@ function registerIpc() {
       throw new Error("快捷键格式无效");
     return setFloatingShortcut(shortcut);
   });
+  handle("floating:get-visible", getFloatingVisible);
+  handle("floating:set-visible", (visible) => {
+    if (typeof visible !== "boolean") throw new Error("悬浮窗显示状态必须是布尔值");
+    return setFloatingVisible(visible);
+  });
+  ipcMain.handle("floating:get-state", (event) => {
+    assertFloatingSender(event);
+    return { ...floatingState };
+  });
+  listen("floating:resize", assertFloatingSender, (width, height) => {
+    if (!Number.isInteger(width) || width < 68 || width > 580 ||
+        !Number.isInteger(height) || height < 68 || height > 320)
+      throw new Error("悬浮窗尺寸超出允许范围");
+    resizeFloatingWindow(width, height);
+  });
+  listen("floating:move", assertFloatingSender, (dx, dy) => {
+    if (!Number.isFinite(dx) || !Number.isFinite(dy) || Math.abs(dx) > 2048 || Math.abs(dy) > 2048)
+      throw new Error("悬浮窗移动增量无效");
+    moveFloatingWindow(dx, dy);
+  });
+  listen("floating:update-status", assertSender, (status) => {
+    if (!status || typeof status !== "object" || Array.isArray(status) ||
+        !["light", "dark", "system"].includes(status.theme) ||
+        typeof status.accent !== "string" || !/^#[0-9a-fA-F]{6}$/.test(status.accent) ||
+        typeof status.hasReminder !== "boolean" || !Number.isInteger(status.todayCount) ||
+        status.todayCount < 0 || status.todayCount > 100000)
+      throw new Error("悬浮窗状态无效");
+    updateFloatingState({ theme: status.theme, accent: status.accent, hasReminder: status.hasReminder, todayCount: status.todayCount });
+  });
+  listen("floating:set-expanded", assertFloatingSender, (expanded) => {
+    if (typeof expanded !== "boolean") throw new Error("悬浮窗展开状态必须是布尔值");
+    updateFloatingState({ expanded });
+  });
+  listen("quick-add:ready", assertSender, () => {
+    quickAddReceiver = mainWindow.webContents;
+    sendQuickAddToMain();
+  });
+  listen("quick-add:not-ready", assertSender, () => {
+    quickAddReceiver = null;
+  });
+  listen("quick-add:complete", assertSender, (requestId, error) => {
+    if (typeof requestId !== "string" || !requestId || requestId.length > 160 ||
+        (error !== undefined && (typeof error !== "string" || error.length > 2000)))
+      throw new Error("快速添加回执无效");
+    if (pendingQuickAdd?.id !== requestId) return;
+    finishQuickAdd(error === undefined ? undefined : new Error(error || "主窗口未能保存任务。"));
+  });
   handle("shortcut:get-desktop", async () => {
     try {
       await fs.access(desktopShortcutPath());
@@ -983,8 +1223,7 @@ function registerIpc() {
     } catch {
       return;
     }
-    floatingRequested = false;
-    floatingWindow?.hide();
+    hideFloatingWindow();
   });
   ipcMain.on("floating:open-main", (event) => {
     try {
@@ -992,24 +1231,18 @@ function registerIpc() {
     } catch {
       return;
     }
-    floatingRequested = false;
-    floatingWindow?.hide();
+    hideFloatingWindow();
     showMainWindow();
   });
-  ipcMain.on("floating:quick-add", (event, text) => {
-    try {
-      assertFloatingSender(event);
-    } catch {
-      return;
-    }
-    if (typeof text !== "string" || !text.trim() || text.length > 2000) return;
-    floatingRequested = false;
-    floatingWindow?.hide();
-    sendQuickAddToMain(text.trim());
+  ipcMain.handle("floating:quick-add", (event, text) => {
+    assertFloatingSender(event);
+    if (typeof text !== "string" || !text.trim() || text.length > 2000)
+      throw new Error("快速添加内容无效");
+    return submitQuickAdd(text.trim());
   });
 }
 
-function createWindow() {
+function createWindow(showWhenReady = true) {
   closeApproved = false;
   closing = false;
   mainWindow = new BrowserWindow({
@@ -1031,6 +1264,9 @@ function createWindow() {
     },
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("did-start-loading", () => {
+    quickAddReceiver = null;
+  });
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   mainWindow.webContents.session.webRequest.onBeforeRequest(
     (details, callback) =>
@@ -1043,7 +1279,7 @@ function createWindow() {
       }),
   );
   mainWindow.once("ready-to-show", () => {
-    if (process.env.DIDA_LOCAL_HEADLESS !== "1") mainWindow.show();
+    if (showWhenReady && process.env.DIDA_LOCAL_HEADLESS !== "1") mainWindow.show();
   });
   mainWindow.on("close", (event) => {
     if (closeApproved) return;
@@ -1071,6 +1307,8 @@ function createWindow() {
     });
   });
   mainWindow.on("closed", () => {
+    quickAddReceiver = null;
+    finishQuickAdd(new Error("主窗口已关闭，任务保存结果尚未确认，请先查看清单。"));
     mainWindow = null;
   });
   mainWindow.loadURL("dida-local://app/index.html");

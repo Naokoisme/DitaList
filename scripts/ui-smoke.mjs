@@ -479,6 +479,15 @@ try {
         assert.equal(status.windows.length, 1, '应只创建一个 DitaList 测试窗口');
         assert.equal(status.windows[0].title, 'DitaList', '窗口标题必须使用产品名');
         assert.ok(status.windows.every(w => !w.visible), '测试窗口不能显示到用户桌面');
+        await value.evaluate(({ app, BrowserWindow }) => {
+          const keepHidden = (window) => {
+            window.show = () => {};
+            window.showInactive = () => {};
+            window.focus = () => {};
+          };
+          BrowserWindow.getAllWindows().forEach(keepHidden);
+          app.on('browser-window-created', (_event, window) => keepHidden(window));
+        });
         launches.push(status);
         return value;
       }
@@ -649,7 +658,7 @@ try {
           await new Promise(resolve => setTimeout(resolve, 25));
         }
         assert.ok(floatingState.data.tasks.some(task => task.title === '悬浮窗验收' && task.dueDate > disk.tasks[0].dueDate), '悬浮窗任务必须使用设置中的默认日期');
-        report.electron.floating = { created: true, quickAddPersisted: true, settingsApplied: true, trayAndHotkeyEntryPoints: true };
+        report.electron.floating = { created: true, quickAddPersisted: true, settingsApplied: true, entryPoint: 'preload openFloating IPC; native tray and global hotkey not exercised' };
         report.electron.launches = launches;
         report.electron.saveFailureProtection = { ...failureProtection, dialogWasStubbedToReturn: 0, realFileRenameFailed: true };
         report.electron.corruptRecovery = { originalBytesPreserved: true, files: corruptFiles, taskCount: recovered.data.tasks.length };

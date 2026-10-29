@@ -14,6 +14,7 @@
     "start": "electron .",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:ui": "node scripts/ui-smoke.mjs",
+    "test:floating": "node --import tsx scripts/floating-smoke.mjs",
     "package:win": "npm run build && node scripts/package-win.mjs",
     "package:setup": "npm run build && node scripts/package-setup.mjs"
   },

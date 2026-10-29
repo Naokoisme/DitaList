@@ -109,8 +109,8 @@
   font-weight: 600;
 }
 .cal-mini-dates > button.cal-mini-selected > span {
-  background: var(--accent, #4772fa);
-  color: #fff;
+  background: var(--soft);
+  color: var(--accent-ink);
 }
 .cal-mini-dates > button > i {
   position: absolute;
@@ -174,8 +174,8 @@
 }
 .cal-filter-checkbox.is-checked {
   border-color: var(--list-color);
-  background: var(--list-color);
-  color: #fff;
+  background: color-mix(in srgb, var(--list-color) 12%, transparent);
+  color: color-mix(in srgb, var(--list-color) 55%, var(--text));
 }
 .cal-sidebar-footer {
   margin-top: auto;
@@ -322,8 +322,8 @@
   font-weight: 600;
 }
 .cal-month-cell.is-selected {
-  background: var(--accent, #4772fa);
-  color: #fff;
+  background: var(--soft);
+  color: var(--accent-ink);
   font-weight: 500;
 }
 .cal-month-popover-footer {
@@ -553,8 +553,8 @@
   background: var(--hover, rgba(0, 0, 0, 0.06));
 }
 .cal-day--today .cal-date-number {
-  background: var(--accent, #4772fa);
-  color: #fff;
+  background: var(--soft);
+  color: var(--accent-ink);
   opacity: 1;
 }
 .cal-lunar {
@@ -822,8 +822,8 @@
   font-size: 10px;
 }
 .cal-time-dayhead.is-today > strong {
-  background: var(--accent, #4772fa);
-  color: #fff;
+  background: var(--soft);
+  color: var(--accent-ink);
 }
 .cal-time-dayhead:hover {
   background: var(--hover, rgba(0, 0, 0, 0.025));
@@ -1082,8 +1082,8 @@
   padding: 7px 14px;
   border-radius: 5px;
   border: 0;
-  color: #fff;
-  background: var(--accent, #4772fa);
+  color: var(--accent-ink);
+  background: var(--soft);
 }
 .cal-sidebar-backdrop {
   display: none;
