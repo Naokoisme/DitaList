@@ -692,7 +692,9 @@ function quitApplication() {
 
 function createTray() {
   if (process.env.DIDA_LOCAL_HEADLESS === "1" || tray) return;
-  tray = new Tray(path.join(distDirectory, "icon.png"));
+  tray = new Tray(
+    path.join(distDirectory, process.platform === "win32" ? "icon.ico" : "icon.png"),
+  );
   tray.setToolTip("DitaList");
   tray.setContextMenu(
     Menu.buildFromTemplate([

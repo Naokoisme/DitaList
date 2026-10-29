@@ -1,18 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Naoko 图标">
-  <defs>
-    <linearGradient id="background" x1="16" y1="8" x2="111" y2="121" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFF7F0"/>
-      <stop offset="1" stop-color="#F3C9BC"/>
-    </linearGradient>
-    <filter id="shadow" x="21" y="19" width="87" height="91" filterUnits="userSpaceOnUse">
-      <feDropShadow dx="0" dy="5" stdDeviation="4" flood-color="#6D3B4A" flood-opacity=".22"/>
-    </filter>
-  </defs>
-  <rect x="3" y="3" width="122" height="122" rx="35" fill="url(#background)"/>
-  <rect x="23" y="18" width="82" height="92" rx="28" fill="#202B55" filter="url(#shadow)"/>
-  <!-- Naoko 的 N：一笔连接两条边，像一条留在纸上的个人签名。 -->
-  <path d="M39 91V37c0-5 6-7 9-3l41 54V37" fill="none" stroke="#FFF7F0" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M39 91V37c0-5 6-7 9-3l41 54V37" fill="none" stroke="#E86C59" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="91" cy="91" r="15" fill="#E86C59"/>
-  <path d="M85 91c2.5-4.8 6.5-7 12-6.5-1.1 6-4.4 9.8-10 11.2" fill="none" stroke="#FFF7F0" stroke-width="3.5" stroke-linecap="round"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="DitaList 像素 N 图标" shape-rendering="crispEdges">
+  <!-- 整数网格、实色描边和阶梯阴影让小尺寸图标保持像素轮廓。 -->
+  <path fill="#8B95A7" d="M8 7H24V10H28V29H8Z"/>
+  <path fill="#151922" d="M5 3H21V5H23V7H25V27H5Z"/>
+  <path fill="#F2F4FA" d="M7 5H19V9H23V25H7Z"/>
+  <path fill="#C6CEDD" d="M21 5V7H23V8H20V5Z"/>
+  <path fill="#151922" d="M9 10H12V12H14V15H16V18H18V10H21V23H18V21H16V18H14V15H12V23H9Z"/>
 </svg>
