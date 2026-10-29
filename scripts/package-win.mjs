@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { rcedit } from "rcedit";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const branch = execFileSync("git", ["branch", "--show-current"], {
@@ -39,6 +40,7 @@ await fs.rename(
   path.join(output, "electron.exe"),
   path.join(output, "本地清单.exe"),
 );
+const executable = path.join(output, "本地清单.exe");
 const application = path.join(output, "resources", "app");
 await fs.mkdir(application, { recursive: true });
 await fs.cp(path.join(root, "dist"), path.join(application, "dist"), {
@@ -47,12 +49,26 @@ await fs.cp(path.join(root, "dist"), path.join(application, "dist"), {
 await fs.cp(path.join(root, "electron"), path.join(application, "electron"), {
   recursive: true,
 });
+await rcedit(executable, {
+  "version-string": {
+    CompanyName: "Naoko",
+    FileDescription: "DitaList",
+    InternalName: "DitaList",
+    OriginalFilename: "本地清单.exe",
+    ProductName: "DitaList",
+    ProductVersion: "0.0.0",
+    LegalCopyright: "Copyright © 2026 Naoko",
+  },
+  "file-version": "0.0.0.0",
+  "product-version": "0.0.0.0",
+  icon: path.join(root, "dist", "icon.ico"),
+});
 await fs.writeFile(
   path.join(application, "package.json"),
   JSON.stringify(
     {
       name: "dida-local",
-      productName: "本地清单",
+      productName: "DitaList",
       version: "0.0.0",
       main: "electron/main.cjs",
     },
@@ -61,7 +77,6 @@ await fs.writeFile(
   ),
   "utf8",
 );
-const executable = path.join(output, "本地清单.exe");
 const hash = createHash("sha256")
   .update(await fs.readFile(executable))
   .digest("hex");

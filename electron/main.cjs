@@ -11,8 +11,8 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 
-app.setName("本地清单");
-app.setAppUserModelId("local.dida.tasks");
+app.setName("DitaList");
+app.setAppUserModelId("Naoko.DitaList");
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "dida-local",
@@ -262,7 +262,7 @@ function createWindow() {
     minWidth: 480,
     minHeight: 500,
     backgroundColor: "#ffffff",
-    title: "本地清单",
+    title: "DitaList",
     icon: path.join(distDirectory, "icon.png"),
     frame: false,
     show: false,
