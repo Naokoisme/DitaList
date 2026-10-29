@@ -75,7 +75,7 @@ $native = Join-Path $projectRoot 'android-native'
 $build = Join-Path $toolRoot ('build-' + $sourceSha.Substring(0, 12))
 if (Test-Path -LiteralPath $build) { throw "本次源码的构建目录已存在：$build。请核对上次结果后处理，不自动覆盖。" }
 $release = Join-Path $projectRoot 'release'
-$apk = Join-Path $release '本地清单-Android.apk'
+$apk = Join-Path $release 'DitaList-Android.apk'
 if (Test-Path -LiteralPath $apk) { throw 'Android交付包已存在，请先核验并归档上一包，脚本不会覆盖' }
 $assets = Join-Path $build 'assets'
 $web = Join-Path $assets 'www'
@@ -138,6 +138,6 @@ Invoke-Checked $zipalign @('-c', '-p', '4', $apk)
 $permissions = (& $aapt dump permissions $apk) -join "`n"
 if ($LASTEXITCODE -ne 0 -or $permissions -match 'android.permission.INTERNET') { throw 'Android权限检查失败' }
 $hash = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()
-$report = [pscustomobject]@{ product='本地清单'; platform='Android'; applicationId='local.dida.tasks'; sourceSha=$sourceSha; builtAt=[DateTimeOffset]::Now.ToString('o'); apk=$apk; size=(Get-Item -LiteralPath $apk).Length; sha256=$hash; toolsManifest=$toolManifestPath; keystore=$keystore; signingPasswordFile=$passwordFile; networkPermission=$false; minimumAndroid='8.0'; reminders='普通AlarmManager；系统省电可能延迟，未作真机验收'; permissions=$permissions }
+$report = [pscustomobject]@{ product='DitaList'; platform='Android'; applicationId='local.dida.tasks'; sourceSha=$sourceSha; builtAt=[DateTimeOffset]::Now.ToString('o'); apk=$apk; size=(Get-Item -LiteralPath $apk).Length; sha256=$hash; toolsManifest=$toolManifestPath; keystore=$keystore; signingPasswordFile=$passwordFile; networkPermission=$false; minimumAndroid='8.0'; reminders='普通AlarmManager；系统省电可能延迟，未作真机验收'; permissions=$permissions }
 $report | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $release 'android-build-info.json') -Encoding UTF8
 $report | ConvertTo-Json -Depth 5

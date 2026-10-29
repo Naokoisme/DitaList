@@ -20,7 +20,7 @@ const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
   cwd: root,
   encoding: "utf8",
 }).trim();
-const output = path.join(root, "release", "本地清单");
+const output = path.join(root, "release", "DitaList");
 try {
   await fs.access(output);
   throw new Error(
@@ -38,9 +38,9 @@ await fs.cp(runtime, output, {
 });
 await fs.rename(
   path.join(output, "electron.exe"),
-  path.join(output, "本地清单.exe"),
+  path.join(output, "DitaList.exe"),
 );
-const executable = path.join(output, "本地清单.exe");
+const executable = path.join(output, "DitaList.exe");
 const application = path.join(output, "resources", "app");
 await fs.mkdir(application, { recursive: true });
 await fs.cp(path.join(root, "dist"), path.join(application, "dist"), {
@@ -49,20 +49,57 @@ await fs.cp(path.join(root, "dist"), path.join(application, "dist"), {
 await fs.cp(path.join(root, "electron"), path.join(application, "electron"), {
   recursive: true,
 });
-await rcedit(executable, {
-  "version-string": {
-    CompanyName: "Naoko",
-    FileDescription: "DitaList",
-    InternalName: "DitaList",
-    OriginalFilename: "本地清单.exe",
-    ProductName: "DitaList",
-    ProductVersion: "0.0.0",
-    LegalCopyright: "Copyright © 2026 Naoko",
-  },
-  "file-version": "0.0.0.0",
-  "product-version": "0.0.0.0",
-  icon: path.join(root, "dist", "icon.ico"),
+await fs.cp(path.join(root, "mcp"), path.join(application, "mcp"), {
+  recursive: true,
 });
+const runtimeModules = path.join(application, "node_modules");
+await fs.mkdir(path.join(runtimeModules, "@modelcontextprotocol"), { recursive: true });
+const serverRealDir = await fs.realpath(
+  path.join(root, "node_modules", "@modelcontextprotocol", "server"),
+);
+const zodRealDir = await fs.realpath(path.join(root, "node_modules", "zod"));
+let coreRealDir;
+try {
+  coreRealDir = await fs.realpath(
+    path.join(root, "node_modules", "@modelcontextprotocol", "core"),
+  );
+} catch {
+  coreRealDir = await fs.realpath(
+    path.join(serverRealDir, "..", "core"),
+  );
+}
+for (const [packageName, sourceDir] of [
+  ["@modelcontextprotocol/server", serverRealDir],
+  ["@modelcontextprotocol/core", coreRealDir],
+  ["zod", zodRealDir],
+]) {
+  await fs.cp(sourceDir, path.join(runtimeModules, packageName), {
+    recursive: true,
+    dereference: true,
+  });
+}
+for (let attempt = 0; attempt < 5; attempt++) {
+  try {
+    await rcedit(executable, {
+      "version-string": {
+        CompanyName: "Naoko",
+        FileDescription: "DitaList",
+        InternalName: "DitaList",
+        OriginalFilename: "DitaList.exe",
+        ProductName: "DitaList",
+        ProductVersion: "0.0.0",
+        LegalCopyright: "Copyright © 2026 Naoko",
+      },
+      "file-version": "0.0.0.0",
+      "product-version": "0.0.0.0",
+      icon: path.join(root, "dist", "icon.ico"),
+    });
+    break;
+  } catch (error) {
+    if (attempt === 4) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+  }
+}
 await fs.writeFile(
   path.join(application, "package.json"),
   JSON.stringify(
@@ -81,7 +118,7 @@ const hash = createHash("sha256")
   .update(await fs.readFile(executable))
   .digest("hex");
 const info = {
-  product: "本地清单",
+  product: "DitaList",
   sourceSha,
   builtAt: new Date().toISOString(),
   executable,
@@ -96,7 +133,7 @@ await fs.writeFile(
 );
 await fs.writeFile(
   path.join(output, "使用说明.txt"),
-  "双击「本地清单.exe」启动。\r\n任务保存在 %APPDATA%\\DidaLocal\\data，退出和重新打开后继续保留。\r\n备份请使用程序设置中的导出功能；导入时合并任务并保留已有内容。\r\n程序无云服务器，不自动在电脑和手机之间同步。\r\n关闭主窗口后程序会留在右下角托盘；需要退出时请使用托盘菜单。\r\n",
+  "双击「DitaList.exe」启动。\r\n任务保存在 %APPDATA%\\DidaLocal\\data，退出和重新打开后继续保留。\r\n备份请使用程序设置中的导出功能；导入时合并任务并保留已有内容。\r\n程序无云服务器，不自动在电脑和手机之间同步。\r\n关闭主窗口后程序会留在右下角托盘；需要退出时请使用托盘菜单。\r\n",
   "utf8",
 );
 const files = [];

@@ -17,7 +17,7 @@ function openDatabase(): Promise<IDBDatabase> {
       );
     request.onblocked = () =>
       reject(
-        new Error("本地数据库正被旧版本页面占用，请关闭其他本地清单窗口后重试"),
+        new Error("本地数据库正被旧版本页面占用，请关闭其他 DitaList 窗口后重试"),
       );
   });
 }
@@ -115,7 +115,7 @@ export async function exportData(data: AppData): Promise<boolean> {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
-  anchor.download = `本地清单备份-${new Date().toISOString().slice(0, 10)}.json`;
+  anchor.download = `DitaList-备份-${new Date().toISOString().slice(0, 10)}.json`;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
   return true;

@@ -29,6 +29,11 @@ input {
   -webkit-app-region: no-drag;
 }
 
+button svg {
+  -webkit-app-region: no-drag;
+  pointer-events: none;
+}
+
 button {
   border: 0;
   cursor: pointer;

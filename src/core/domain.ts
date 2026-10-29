@@ -86,6 +86,8 @@ const taskSchema = z
     updatedAt: timestampSchema,
     sortOrder: z.number().finite(),
     pinned: z.boolean(),
+    createdBy: z.enum(["user", "agent"]).default("user"),
+    agentStatus: z.enum(["pending", "approved"]).default("approved"),
     recurrenceAnchor: dateSchema.optional(),
     recurrenceId: idSchema.optional(),
   })
@@ -171,6 +173,7 @@ const appSchema = z.object({
     floatingShortcut: z.string().trim().max(100).default("CommandOrControl+Alt+Space"),
     floatingDefaultListId: idSchema.default("inbox"),
     floatingDefaultDate: z.enum(["none", "today", "tomorrow"]).default("today"),
+    customTags: z.array(z.string().trim().min(1).max(200)).max(500).default([]),
   }),
 });
 
@@ -251,6 +254,7 @@ export function createEmptyData(): AppData {
       floatingShortcut: "CommandOrControl+Alt+Space",
       floatingDefaultListId: "inbox",
       floatingDefaultDate: "today",
+      customTags: [],
     },
   };
 }
@@ -279,6 +283,8 @@ export function createTask(
     updatedAt: stamp,
     sortOrder: now.getTime(),
     pinned: false,
+    createdBy: "user",
+    agentStatus: "approved",
     ...input,
   };
   const result = taskSchema.safeParse(value);
@@ -337,6 +343,7 @@ export function completeTask(
   const series = recurring.recurrenceId || task.id;
   const completed = {
     ...task,
+    agentStatus: "approved" as const,
     completedAt: stamp,
     updatedAt: stamp,
     ...(task.repeat !== "none"

@@ -3,12 +3,14 @@ import {
   Archive,
   ArrowDownAZ,
   Bell,
+  Bot,
   CalendarDays,
   CalendarRange,
   CalendarCheck2,
   Check,
   CheckCheck,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CircleHelp,
   Clock3,
@@ -46,6 +48,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type {
+  AgentDocumentInfo,
   AppData,
   Priority,
   Reminder,
@@ -62,6 +65,7 @@ import {
   importBackupText,
   localDate,
   parseQuickInput,
+  validateData,
 } from "./core/domain";
 import { exportData, loadData, saveData } from "./core/storage";
 import CalendarView from "./components/CalendarView";
@@ -114,6 +118,7 @@ const colors = [
   "#81909d",
 ];
 const stamp = () => new Date().toISOString();
+const TargetIcon = Clock3;
 
 function shortcutLabel(shortcut: string) {
   return shortcut
@@ -244,6 +249,10 @@ export default function App() {
   const [listDialog, setListDialog] = useState<
     "list" | "folder" | TaskList | null
   >(null);
+  const [tagDialog, setTagDialog] = useState<{
+    mode: "create" | "edit";
+    name: string;
+  } | null>(null);
   const [filterDialog, setFilterDialog] = useState(false);
   const [context, setContext] = useState<{
     id: string;
@@ -255,11 +264,15 @@ export default function App() {
   );
   const [completedOpen, setCompletedOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [agentReviewOpen, setAgentReviewOpen] = useState(false);
+  const [dragOverNav, setDragOverNav] = useState<string | null>(null);
+  const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const quickRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const loaded = useRef(false);
   const latestData = useRef<AppData | null>(null);
   const saveRevision = useRef(0);
+  const reviewedAgentIds = useRef(new Set<string>());
   latestData.current = data;
   const [boot, setBoot] = useState(0);
 
@@ -282,6 +295,30 @@ export default function App() {
     };
   }, [boot]);
   useEffect(() => {
+    if (!window.didaLocal?.onExternalData) return;
+    return window.didaLocal.onExternalData((payload) => {
+      try {
+        const next = validateData(payload.data);
+        setData(next);
+        setSelectedId((id) => (id && next.tasks.some((task) => task.id === id) ? id : null));
+        if (payload.reason.startsWith("agent-task-")) setToast("Agent 已更新本机任务");
+      } catch (error) {
+        setToast(`外部任务更新无效：${error instanceof Error ? error.message : String(error)}`);
+      }
+    });
+  }, []);
+  useEffect(() => {
+    if (!data) return;
+    const pending = data.tasks.filter(
+      (task) => task.createdBy === "agent" && task.agentStatus === "pending" && !task.deletedAt,
+    );
+    if (pending.length && pending.some((task) => !reviewedAgentIds.current.has(task.id))) {
+      setAgentReviewOpen(true);
+      pending.forEach((task) => reviewedAgentIds.current.add(task.id));
+    }
+  }, [data]);
+
+  useEffect(() => {
     if (!data || !loaded.current) return;
     const revision = ++saveRevision.current;
     setSaveStatus("saving");
@@ -296,6 +333,19 @@ export default function App() {
         }
       });
   }, [data]);
+
+  useEffect(() => {
+    const clearDrag = () => {
+      setDraggingTaskId(null);
+      setDragOverNav(null);
+    };
+    window.addEventListener("dragend", clearDrag);
+    window.addEventListener("drop", clearDrag);
+    return () => {
+      window.removeEventListener("dragend", clearDrag);
+      window.removeEventListener("drop", clearDrag);
+    };
+  }, []);
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(""), 5500);
@@ -347,6 +397,20 @@ export default function App() {
       })),
     [update],
   );
+  const approveAgentTasks = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    update((s) => ({
+      ...s,
+      tasks: s.tasks.map((task) =>
+        ids.includes(task.id) && task.createdBy === "agent" && task.agentStatus === "pending"
+          ? { ...task, agentStatus: "approved", updatedAt: stamp() }
+          : task,
+      ),
+    }));
+    setAgentReviewOpen(false);
+    setToast(`${ids.length} 条 Agent 任务已确认`);
+  }, [update]);
+
   const toggle = useCallback(
     (id: string) =>
       update((s) => {
@@ -378,6 +442,7 @@ export default function App() {
         setSearchOpen(false);
         setSettingsOpen(false);
         setListDialog(null);
+        setTagDialog(null);
         setContext(null);
         setSelectedId(null);
         setHelpOpen(false);
@@ -469,11 +534,13 @@ export default function App() {
   const tags = useMemo(
     () =>
       Array.from(
-        new Set(
-          data?.tasks.filter((t) => !t.deletedAt).flatMap((t) => t.tags) || [],
-        ),
-      ).sort(),
-    [data?.tasks],
+        new Set([
+          ...(data?.settings.customTags || []),
+          ...(data?.tasks.filter((t) => !t.deletedAt).flatMap((t) => t.tags) ||
+            []),
+        ]),
+      ).sort((a, b) => a.localeCompare(b, "zh-CN")),
+    [data?.tasks, data?.settings.customTags],
   );
   const title = view.startsWith("list:")
     ? data?.lists.find((l) => l.id === view.slice(5))?.name || "清单"
@@ -556,8 +623,12 @@ export default function App() {
     const { defaultDueDate, ...taskOverrides } = overrides;
     const parsed = parseQuickInput(text, currentListId);
     if (!parsed.title.trim()) return;
+    const currentTag = view.startsWith("tag:") ? view.slice(4) : null;
     const t = createTask({
       ...parsed,
+      ...(currentTag
+        ? { tags: Array.from(new Set([...(parsed.tags || []), currentTag])) }
+        : {}),
       listId: currentListId,
       ...(view === "today" && !parsed.dueDate ? { dueDate: localDate() } : {}),
       ...(defaultDueDate !== undefined && !parsed.dueDate
@@ -668,62 +739,229 @@ export default function App() {
         <span className="loading-mark">
           <Check size={22} />
         </span>
-        <span>正在读取本地清单…</span>
+        <span>正在读取 DitaList…</span>
       </div>
     );
+
+  const canDropOnNav = (id: ViewId) =>
+    id === "today" ||
+    id === "next7" ||
+    id === "inbox" ||
+    id === "completed" ||
+    id === "trash" ||
+    id.startsWith("list:") ||
+    id.startsWith("tag:");
+
+  const handleSidebarDrop = (target: ViewId, taskId: string) => {
+    setDragOverNav(null);
+    setDraggingTaskId(null);
+    if (!taskId) return;
+    const task = data.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const today = localDate();
+    if (target === "today") {
+      patchTask(taskId, { dueDate: today, deletedAt: null });
+      setToast("已将任务排入「今天」");
+      return;
+    }
+    if (target === "next7") {
+      const nextDate =
+        !task.dueDate ||
+        task.dueDate <= today ||
+        task.dueDate > addDays(today, 6)
+          ? addDays(today, 1)
+          : task.dueDate;
+      patchTask(taskId, { dueDate: nextDate, deletedAt: null });
+      setToast(`已将任务排入「最近7天」（${dateText(nextDate)}）`);
+      return;
+    }
+    if (target === "inbox") {
+      const clearSchedule =
+        (view === "today" || view === "next7") && task.listId === "inbox";
+      patchTask(taskId, {
+        listId: "inbox",
+        deletedAt: null,
+        ...(clearSchedule ? { dueDate: null, startDate: null } : {}),
+      });
+      setToast(
+        clearSchedule ? "已移回「收集箱」并清除日期" : "已移至「收集箱」",
+      );
+      return;
+    }
+    if (target.startsWith("list:")) {
+      const listId = target.slice(5);
+      const listName =
+        data.lists.find((l) => l.id === listId)?.name || "清单";
+      patchTask(taskId, { listId, deletedAt: null });
+      setToast(`已移至清单「${listName}」`);
+      return;
+    }
+    if (target.startsWith("tag:")) {
+      const tagName = target.slice(4);
+      if (!task.tags.includes(tagName)) {
+        patchTask(taskId, {
+          tags: [...task.tags, tagName],
+          deletedAt: null,
+        });
+      }
+      setToast(`已添加标签 #${tagName}`);
+      return;
+    }
+    if (target === "completed") {
+      if (!task.completedAt) toggle(taskId);
+      setToast("已完成任务");
+      return;
+    }
+    if (target === "trash") {
+      trashTask(taskId);
+    }
+  };
+
+  const hasDropHintTask = Boolean(draggingTaskId || selectedId);
 
   const sidebarItem = (
     id: ViewId,
     label: string,
     Icon: LucideIcon,
     count?: number,
-  ) => (
-    <button
-      key={id}
-      className={`sidebar-item ${view === id ? "selected" : ""}`}
-      title={
-        id === "inbox"
-          ? "暂时不知道放哪的任务先放这里，之后再整理"
-          : undefined
-      }
-      onClick={() => go(id)}
-    >
-      <Icon size={17} />
-      <span>{label}</span>
-      {!!count && <small>{count}</small>}
-    </button>
-  );
-  const listItem = (l: TaskList) => (
-    <div
-      key={l.id}
-      className="sidebar-list-item"
-      onContextMenu={(e) => {
-        e.preventDefault();
-        setListDialog(l);
-      }}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        const id = e.dataTransfer.getData("text/dida-task");
-        if (id) patchTask(id, { listId: l.id });
-      }}
-    >
+  ) => {
+    const droppable = canDropOnNav(id);
+    const isDropCandidate = droppable && view !== id && hasDropHintTask;
+    return (
       <button
-        className={`sidebar-item ${view === `list:${l.id}` ? "selected" : ""}`}
-        onClick={() => go(`list:${l.id}`)}
+        key={id}
+        className={`sidebar-item ${view === id ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === id ? "drag-over" : ""}`}
+        title={
+          id === "inbox"
+            ? "暂时不知道放哪的任务先放这里，之后再整理；也可将任务拖到这里、今天或最近7天"
+            : droppable
+              ? `可将任务拖动到「${label}」`
+              : undefined
+        }
+        onClick={() => go(id)}
+        onDragOver={
+          droppable
+            ? (e) => {
+                e.preventDefault();
+                if (dragOverNav !== id) setDragOverNav(id);
+              }
+            : undefined
+        }
+        onDragLeave={
+          droppable
+            ? () => {
+                if (dragOverNav === id) setDragOverNav(null);
+              }
+            : undefined
+        }
+        onDrop={
+          droppable
+            ? (e) => {
+                e.preventDefault();
+                handleSidebarDrop(
+                  id,
+                  e.dataTransfer.getData("text/dida-task"),
+                );
+              }
+            : undefined
+        }
+        data-nav-id={id}
       >
-        <List size={17} style={{ color: l.color }} />
-        <span>{l.name}</span>
-        <small>{active.filter((t) => t.listId === l.id).length || ""}</small>
+        <Icon size={17} />
+        <span>{label}</span>
+        {!!count && <small>{count}</small>}
       </button>
-      <button
-        className="list-edit-button"
-        aria-label={`编辑清单 ${l.name}`}
-        onClick={() => setListDialog(l)}
+    );
+  };
+  const listItem = (l: TaskList) => {
+    const navId: ViewId = `list:${l.id}`;
+    const isDropCandidate = view !== navId && hasDropHintTask;
+    return (
+      <div
+        key={l.id}
+        className="sidebar-list-item"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setListDialog(l);
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (dragOverNav !== navId) setDragOverNav(navId);
+        }}
+        onDragLeave={() => {
+          if (dragOverNav === navId) setDragOverNav(null);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          handleSidebarDrop(navId, e.dataTransfer.getData("text/dida-task"));
+        }}
       >
-        <MoreHorizontal size={14} />
-      </button>
-    </div>
-  );
+        <button
+          className={`sidebar-item ${view === navId ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === navId ? "drag-over" : ""}`}
+          onClick={() => go(navId)}
+          onDoubleClick={() => setListDialog(l)}
+          data-nav-id={navId}
+        >
+          <List size={17} style={{ color: l.color }} />
+          <span>{l.name}</span>
+          <small>{active.filter((t) => t.listId === l.id).length || ""}</small>
+        </button>
+        <button
+          className="list-edit-button"
+          aria-label={`编辑清单 ${l.name}`}
+          onClick={() => setListDialog(l)}
+        >
+          <MoreHorizontal size={14} />
+        </button>
+      </div>
+    );
+  };
+  const tagItem = (t: string) => {
+    const navId: ViewId = `tag:${t}`;
+    const isDropCandidate = view !== navId && hasDropHintTask;
+    const count = active.filter((x) => x.tags.includes(t)).length;
+    return (
+      <div
+        key={t}
+        className="sidebar-list-item"
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setTagDialog({ mode: "edit", name: t });
+        }}
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (dragOverNav !== navId) setDragOverNav(navId);
+        }}
+        onDragLeave={() => {
+          if (dragOverNav === navId) setDragOverNav(null);
+        }}
+        onDrop={(e) => {
+          e.preventDefault();
+          handleSidebarDrop(navId, e.dataTransfer.getData("text/dida-task"));
+        }}
+      >
+        <button
+          className={`sidebar-item ${view === navId ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === navId ? "drag-over" : ""}`}
+          title={`可将任务拖动到标签 #${t}，双击、右键或点击右侧按钮可重命名或删除`}
+          onClick={() => go(navId)}
+          onDoubleClick={() => setTagDialog({ mode: "edit", name: t })}
+          data-nav-id={navId}
+        >
+          <Hash size={17} />
+          <span>{t}</span>
+          {!!count && <small>{count}</small>}
+        </button>
+        <button
+          className="list-edit-button"
+          aria-label={`编辑标签 ${t}`}
+          title={`重命名或删除标签 #${t}`}
+          onClick={() => setTagDialog({ mode: "edit", name: t })}
+        >
+          <MoreHorizontal size={14} />
+        </button>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -736,7 +974,7 @@ export default function App() {
         <button
           className="local-avatar"
           aria-label="设置"
-          title="本地清单 · 设置"
+          title="DitaList · 设置"
           onClick={() => setSettingsOpen(true)}
         >
           <img src="./icon.svg" alt="" />
@@ -811,45 +1049,7 @@ export default function App() {
         </div>
       </nav>
       {info?.kind === "desktop" && (
-        <div className="window-controls">
-          <button
-            type="button"
-            aria-label="最小化"
-            title="最小化"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              window.didaLocal?.windowAction("minimize");
-            }}
-          >
-            <Minus size={13} />
-          </button>
-          <button
-            type="button"
-            aria-label="最大化或还原"
-            title="最大化或还原"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              window.didaLocal?.windowAction("maximize");
-            }}
-          >
-            <Square size={11} />
-          </button>
-          <button
-            type="button"
-            className="close-window"
-            aria-label="关闭窗口"
-            title="关闭窗口"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              void closeWindow();
-            }}
-          >
-            <X size={15} />
-          </button>
-        </div>
+        <div className="window-drag-bar" aria-hidden="true" />
       )}
       {!["calendar", "matrix", "focus", "habits"].includes(view) && (
         <>
@@ -934,28 +1134,21 @@ export default function App() {
                 <span>标签</span>
                 <button
                   title="添加标签"
-                  onClick={() => {
-                    setToast("在任务标题输入 #标签，或在任务详情中添加标签。");
-                    quickRef.current?.focus();
-                  }}
+                  aria-label="新建标签"
+                  onClick={() => setTagDialog({ mode: "create", name: "" })}
                 >
                   <Plus size={14} />
                 </button>
               </div>
-              {tags.map((t) =>
-                sidebarItem(
-                  `tag:${t}`,
-                  t,
-                  Hash,
-                  active.filter((x) => x.tags.includes(t)).length,
-                ),
-              )}
+              {tags.map(tagItem)}
               {!tags.length && (
-                <p className="sidebar-hint">
-                  添加任务时输入 #，
-                  <br />
-                  给任务加上标签。
-                </p>
+                <button
+                  className="sidebar-empty-add"
+                  onClick={() => setTagDialog({ mode: "create", name: "" })}
+                >
+                  <Plus size={13} />
+                  添加你的第一个标签
+                </button>
               )}
               <div className="sidebar-section-heading">
                 <span>过滤器</span>
@@ -1087,7 +1280,28 @@ export default function App() {
               >
                 <Menu size={19} />
               </button>
-              <h1>{title}</h1>
+              <h1
+                onDoubleClick={
+                  view.startsWith("tag:")
+                    ? () => setTagDialog({ mode: "edit", name: view.slice(4) })
+                    : undefined
+                }
+                title={
+                  view.startsWith("tag:") ? "双击编辑或删除当前标签" : undefined
+                }
+              >
+                {title}
+              </h1>
+              {view.startsWith("tag:") && (
+                <IconButton
+                  label="管理当前标签"
+                  onClick={() =>
+                    setTagDialog({ mode: "edit", name: view.slice(4) })
+                  }
+                >
+                  <Settings2 size={17} />
+                </IconButton>
+              )}
               <div className="header-actions">
                 <IconButton
                   label="添加任务 Ctrl+N"
@@ -1099,17 +1313,19 @@ export default function App() {
                 >
                   <Plus size={20} />
                 </IconButton>
-                <select
+                <CustomSelect
                   className="sort-select"
-                  aria-label="任务排序"
+                  ariaLabel="任务排序"
+                  alignRight
                   value={sort}
-                  onChange={(e) => setSort(e.target.value as typeof sort)}
-                >
-                  <option value="manual">手动排序</option>
-                  <option value="priority">按优先级</option>
-                  <option value="date">按日期</option>
-                  <option value="title">按标题</option>
-                </select>
+                  options={[
+                    { value: "manual", label: "手动排序" },
+                    { value: "priority", label: "按优先级" },
+                    { value: "date", label: "按日期" },
+                    { value: "title", label: "按标题" },
+                  ]}
+                  onChange={(val) => setSort(val as typeof sort)}
+                />
                 <IconButton
                   label={
                     data.settings.showCompleted ? "隐藏已完成" : "显示已完成"
@@ -1180,8 +1396,17 @@ export default function App() {
                       task={t}
                       list={data.lists.find((l) => l.id === t.listId)}
                       selected={selectedId === t.id}
+                      dragging={draggingTaskId === t.id}
                       showList={!view.startsWith("list:")}
                       onSelect={() => setSelectedId(t.id)}
+                      onDragStartTask={() => {
+                        setSelectedId(t.id);
+                        setDraggingTaskId(t.id);
+                      }}
+                      onDragEndTask={() => {
+                        setDraggingTaskId(null);
+                        setDragOverNav(null);
+                      }}
                       onToggle={() => toggle(t.id)}
                       onDate={() => setDateTask(t)}
                       onContext={(e) => {
@@ -1295,7 +1520,16 @@ export default function App() {
                           task={t}
                           list={data.lists.find((l) => l.id === t.listId)}
                           selected={selectedId === t.id}
+                          dragging={draggingTaskId === t.id}
                           onSelect={() => setSelectedId(t.id)}
+                          onDragStartTask={() => {
+                            setSelectedId(t.id);
+                            setDraggingTaskId(t.id);
+                          }}
+                          onDragEndTask={() => {
+                            setDraggingTaskId(null);
+                            setDragOverNav(null);
+                          }}
                           onToggle={() => toggle(t.id)}
                           onDate={() => setDateTask(t)}
                           onContext={(e) => {
@@ -1324,6 +1558,8 @@ export default function App() {
           onDate={() => setDateTask(selected)}
           onTrash={() => trashTask(selected.id)}
           onRestore={() => patchTask(selected.id, { deletedAt: null })}
+          onNewList={() => setListDialog("list")}
+          onToast={setToast}
         />
       )}
 
@@ -1435,6 +1671,7 @@ export default function App() {
           endDate={createDialog.endDate}
           defaultTime={createDialog.time}
           onClose={() => setCreateDialog(null)}
+          onNewList={() => setListDialog("list")}
           onCreate={(input) => {
             addTaskFromInput(input.title, input);
             setCreateDialog(null);
@@ -1507,6 +1744,94 @@ export default function App() {
                   }));
                   setListDialog(null);
                   go("all");
+                }
+              : undefined
+          }
+        />
+      )}
+      {tagDialog && (
+        <TagDialog
+          mode={tagDialog.mode}
+          initialName={tagDialog.name}
+          onClose={() => setTagDialog(null)}
+          onSave={(rawName) => {
+            const cleanName = rawName.trim().replace(/^#+/, "").trim();
+            if (!cleanName) return;
+            if (tagDialog.mode === "create") {
+              update((s) => ({
+                ...s,
+                settings: {
+                  ...s.settings,
+                  customTags: Array.from(
+                    new Set([...(s.settings.customTags || []), cleanName]),
+                  ),
+                },
+              }));
+              setTagDialog(null);
+              go(`tag:${cleanName}`);
+              setToast(`已添加标签 #${cleanName}`);
+            } else {
+              const oldName = tagDialog.name;
+              const now = stamp();
+              update((s) => ({
+                ...s,
+                settings: {
+                  ...s.settings,
+                  customTags: Array.from(
+                    new Set(
+                      (s.settings.customTags || []).map((t) =>
+                        t === oldName ? cleanName : t,
+                      ),
+                    ),
+                  ),
+                },
+                tasks: s.tasks.map((task) =>
+                  task.tags.includes(oldName)
+                    ? {
+                        ...task,
+                        tags: Array.from(
+                          new Set(
+                            task.tags.map((t) =>
+                              t === oldName ? cleanName : t,
+                            ),
+                          ),
+                        ),
+                        updatedAt: now,
+                      }
+                    : task,
+                ),
+              }));
+              setTagDialog(null);
+              if (view === `tag:${oldName}`) go(`tag:${cleanName}`);
+              setToast(`已将标签重命名为 #${cleanName}`);
+            }
+          }}
+          onDelete={
+            tagDialog.mode === "edit"
+              ? () => {
+                  const oldName = tagDialog.name;
+                  const now = stamp();
+                  update((s) => ({
+                    ...s,
+                    settings: {
+                      ...s.settings,
+                      customTags: (s.settings.customTags || []).filter(
+                        (t) => t !== oldName,
+                      ),
+                    },
+                    tasks: s.tasks.map((task) =>
+                      task.tags.includes(oldName)
+                        ? {
+                            ...task,
+                            tags: task.tags.filter((t) => t !== oldName),
+                            updatedAt: now,
+                          }
+                        : task,
+                    ),
+                  }));
+                  setTagDialog(null);
+                  if (view === `tag:${oldName}`) go("all");
+                  setToast(`已删除标签 #${oldName}`);
                 }
               : undefined
           }
@@ -1596,6 +1921,7 @@ export default function App() {
           onExport={doExport}
           onImport={doImport}
           onReveal={() => void window.didaLocal?.revealData()}
+          onToast={setToast}
           onUnarchive={(id) =>
             update((s) => ({
               ...s,
@@ -1606,6 +1932,36 @@ export default function App() {
           }
         />
       )}
+      {agentReviewOpen &&
+        data &&
+        data.tasks.some(
+          (task) =>
+            task.createdBy === "agent" &&
+            task.agentStatus === "pending" &&
+            !task.deletedAt,
+        ) && (
+          <AgentReviewDialog
+            tasks={data.tasks.filter(
+              (task) =>
+                task.createdBy === "agent" &&
+                task.agentStatus === "pending" &&
+                !task.deletedAt,
+            )}
+            lists={data.lists}
+            onClose={() => setAgentReviewOpen(false)}
+            onApprove={approveAgentTasks}
+            onReject={(ids) => {
+              const now = stamp();
+              update((s) => ({
+                ...s,
+                tasks: s.tasks.map((t) =>
+                  ids.includes(t.id) ? { ...t, deletedAt: now, updatedAt: now } : t,
+                ),
+              }));
+              setToast(`已移除 ${ids.length} 条待确认任务`);
+            }}
+          />
+        )}
       {helpOpen && (
         <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}>
           <div
@@ -1668,18 +2024,249 @@ export default function App() {
           </button>
         </div>
       )}
+      {info?.kind === "desktop" && (
+        <div className="window-controls">
+          <button
+            type="button"
+            aria-label="最小化"
+            title="最小化"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              window.didaLocal?.windowAction("minimize");
+            }}
+          >
+            <Minus size={13} />
+          </button>
+          <button
+            type="button"
+            aria-label="最大化或还原"
+            title="最大化或还原"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              window.didaLocal?.windowAction("maximize");
+            }}
+          >
+            <Square size={11} />
+          </button>
+          <button
+            type="button"
+            className="close-window"
+            aria-label="关闭窗口"
+            title="关闭窗口"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void closeWindow();
+            }}
+          >
+            <X size={15} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
-const TargetIcon = Clock3;
+function AgentReviewDialog({
+  tasks,
+  lists,
+  onClose,
+  onApprove,
+  onReject,
+}: {
+  tasks: Task[];
+  lists: TaskList[];
+  onClose: () => void;
+  onApprove: (ids: string[]) => void;
+  onReject: (ids: string[]) => void;
+}) {
+  const [selected, setSelected] = useState(
+    () => new Set(tasks.map((task) => task.id)),
+  );
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const task of tasks) {
+        if (!next.has(task.id)) next.add(task.id);
+      }
+      return next;
+    });
+  }, [tasks]);
+  const selectedIds = tasks
+    .filter((task) => selected.has(task.id))
+    .map((task) => task.id);
+  const allSelected = selectedIds.length === tasks.length && tasks.length > 0;
+  const toggle = (id: string) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <div
+        className="dialog agent-review-dialog"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="dialog-header">
+          <div className="agent-review-header-title">
+            <h2>
+              <Bot size={18} />
+              <span>Agent 任务确认</span>
+              <span className="agent-review-count">{tasks.length}</span>
+            </h2>
+            <p className="agent-review-note">
+              Agent 已规划以下待办任务，确认后将正式加入你的清单。
+            </p>
+          </div>
+          <IconButton label="关闭确认" onClick={onClose}>
+            <X size={18} />
+          </IconButton>
+        </div>
+        <div className="agent-review-list">
+          {tasks.map((task) => {
+            const checked = selected.has(task.id);
+            const list = lists.find((l) => l.id === task.listId);
+            return (
+              <div
+                className={`agent-review-item ${checked ? "is-checked" : ""}`}
+                key={task.id}
+                onClick={() => toggle(task.id)}
+              >
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={checked}
+                  aria-label={`选择 ${task.title}`}
+                  className={`task-check p${task.priority} ${checked ? "checked" : ""}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggle(task.id);
+                  }}
+                >
+                  {checked && <Check size={12} />}
+                </button>
+                <div className="agent-review-body">
+                  <div className="agent-review-title-row">
+                    <strong>{task.title}</strong>
+                    {list && (
+                      <span
+                        className="agent-review-list-badge"
+                        style={{ color: list.color }}
+                      >
+                        {list.name}
+                      </span>
+                    )}
+                    {task.dueDate && (
+                      <span className="agent-review-date-badge">
+                        <CalendarDays size={11} />
+                        {dateText(task.dueDate)}
+                        {task.time ? ` ${task.time}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  {task.content && (
+                    <p className="agent-review-desc">{task.content}</p>
+                  )}
+                  {task.tags.length > 0 && (
+                    <div className="agent-review-tags">
+                      {task.tags.map((t) => (
+                        <span key={t}>#{t}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div
+                  className="agent-review-actions"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <button
+                    type="button"
+                    className="agent-review-approve"
+                    onClick={() => onApprove([task.id])}
+                    title="单独确认此任务"
+                    aria-label={`确认 ${task.title}`}
+                  >
+                    <Check size={14} />
+                  </button>
+                  <button
+                    type="button"
+                    className="agent-review-reject"
+                    onClick={() => onReject([task.id])}
+                    title="移入垃圾桶"
+                    aria-label={`移除 ${task.title}`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="dialog-footer">
+          <button
+            type="button"
+            className="text-button"
+            onClick={() =>
+              setSelected(
+                allSelected ? new Set() : new Set(tasks.map((task) => task.id)),
+              )
+            }
+          >
+            {allSelected ? "取消全选" : "全选"}
+          </button>
+          <button type="button" className="text-button" onClick={onClose}>
+            稍后处理
+          </button>
+          <button
+            type="button"
+            className="primary-button"
+            disabled={!selectedIds.length}
+            onClick={() => onApprove(selectedIds)}
+          >
+            <Check size={15} />
+            确认选中 ({selectedIds.length})
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function attachCompactDragGhost(e: React.DragEvent, task: Task) {
+  if (!e.dataTransfer?.setDragImage) return;
+  let ghost = document.getElementById("dida-drag-ghost");
+  if (!ghost) {
+    ghost = document.createElement("div");
+    ghost.id = "dida-drag-ghost";
+    ghost.className = "task-drag-ghost";
+    document.body.appendChild(ghost);
+  }
+  const color =
+    priorities.find((p) => p.value === task.priority)?.color || "#4772fa";
+  ghost.innerHTML = "";
+  const dot = document.createElement("i");
+  dot.className = "task-drag-ghost-dot";
+  dot.style.background = color;
+  const text = document.createElement("span");
+  text.textContent =
+    task.title.length > 10 ? `${task.title.slice(0, 10)}…` : task.title;
+  ghost.append(dot, text);
+  e.dataTransfer.setDragImage(ghost, 28, 20);
+}
 
 function TaskRow({
   task,
   list,
   selected,
+  dragging,
   showList,
   onSelect,
+  onDragStartTask,
+  onDragEndTask,
   onToggle,
   onDate,
   onContext,
@@ -1688,8 +2275,11 @@ function TaskRow({
   task: Task;
   list?: TaskList;
   selected: boolean;
+  dragging?: boolean;
   showList?: boolean;
   onSelect: () => void;
+  onDragStartTask?: () => void;
+  onDragEndTask?: () => void;
   onToggle: () => void;
   onDate: () => void;
   onContext: (e: React.MouseEvent) => void;
@@ -1697,9 +2287,14 @@ function TaskRow({
 }) {
   return (
     <div
-      className={`task-row ${selected ? "selected" : ""} ${task.completedAt ? "completed" : ""}`}
+      className={`task-row ${selected ? "selected" : ""} ${dragging ? "is-dragging" : ""} ${task.completedAt ? "completed" : ""}`}
       draggable={!task.deletedAt}
-      onDragStart={(e) => e.dataTransfer.setData("text/dida-task", task.id)}
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/dida-task", task.id);
+        attachCompactDragGhost(e, task);
+        onDragStartTask?.();
+      }}
+      onDragEnd={() => onDragEndTask?.()}
       onDragOver={(e) => {
         if (onDrop) e.preventDefault();
       }}
@@ -1733,6 +2328,21 @@ function TaskRow({
       </button>
       <div className="task-row-title">
         <span>{task.title}</span>
+        {task.createdBy === "agent" && (
+          <span
+            className={`agent-task-badge ${task.agentStatus === "pending" && !task.completedAt ? "pending" : "approved"}`}
+            title={
+              task.agentStatus === "pending" && !task.completedAt
+                ? "Agent 创建，等待确认"
+                : "Agent 创建，已确认"
+            }
+          >
+            <Bot size={12} />
+            {task.agentStatus === "pending" && !task.completedAt
+              ? "待确认"
+              : "Agent"}
+          </span>
+        )}
         {task.content && <small className="task-content-indicator">≡</small>}
         {task.subtasks.length > 0 && (
           <small className="subtask-count">
@@ -1779,6 +2389,8 @@ function TaskDetail({
   onDate,
   onTrash,
   onRestore,
+  onNewList,
+  onToast,
 }: {
   task: Task;
   data: AppData;
@@ -1788,6 +2400,8 @@ function TaskDetail({
   onDate: () => void;
   onTrash: () => void;
   onRestore: () => void;
+  onNewList?: () => void;
+  onToast?: (message: string) => void;
 }) {
   const [subtask, setSubtask] = useState("");
   const [tag, setTag] = useState("");
@@ -1814,23 +2428,19 @@ function TaskDetail({
           {task.repeat !== "none" && <RotateCcw size={12} />}
         </button>
         <div className="detail-priority">
-          <select
-            aria-label="任务优先级"
+          <CustomSelect
+            ariaLabel="任务优先级"
+            alignRight
+            iconOnly
+            triggerIcon={<Flag size={17} />}
             value={task.priority}
-            onChange={(e) =>
-              onPatch({ priority: Number(e.target.value) as Priority })
-            }
-            style={{
-              color: priorities.find((p) => p.value === task.priority)?.color,
-            }}
-          >
-            {priorities.map((p) => (
-              <option key={p.value} value={p.value}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          <Flag size={17} />
+            options={priorities.map((p) => ({
+              value: p.value,
+              label: p.label,
+              color: p.color,
+            }))}
+            onChange={(val) => onPatch({ priority: val as Priority })}
+          />
         </div>
         <IconButton label="关闭任务详情" onClick={onClose}>
           <X size={17} />
@@ -1964,25 +2574,21 @@ function TaskDetail({
         <div className="detail-settings-row">
           <RotateCcw size={15} />
           <span>重复</span>
-          <select
-            aria-label="重复规则"
+          <CustomSelect
+            ariaLabel="重复规则"
+            alignRight
             value={task.repeat}
-            onChange={(e) =>
+            options={repeats}
+            onChange={(val) =>
               onPatch({
-                repeat: e.target.value as RepeatRule,
-                ...(e.target.value !== "none" && !task.dueDate
+                repeat: val as RepeatRule,
+                ...(val !== "none" && !task.dueDate
                   ? { dueDate: localDate() }
                   : {}),
                 recurrenceAnchor: task.dueDate || localDate(),
               })
             }
-          >
-            {repeats.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
+          />
         </div>
         <button className="detail-settings-row" onClick={onDate}>
           <Bell size={15} />
@@ -2000,18 +2606,18 @@ function TaskDetail({
       </div>
       <footer className="detail-footer">
         <div className="detail-list-select">
-          <List size={14} />
-          <select
-            value={task.listId}
-            aria-label="所属清单"
-            onChange={(e) => onPatch({ listId: e.target.value })}
-          >
-            {data.lists.map((l) => (
-              <option key={l.id} value={l.id}>
-                {l.name}
-              </option>
-            ))}
-          </select>
+          <TaskDestinationSelect
+            listId={task.listId}
+            dueDate={task.dueDate}
+            lists={data.lists}
+            ariaLabel="所属清单"
+            popUp
+            onNewList={onNewList}
+            onChange={(patch, notice) => {
+              onPatch(patch);
+              if (notice) onToast?.(notice);
+            }}
+          />
         </div>
         <IconButton
           label={task.pinned ? "取消置顶" : "置顶任务"}
@@ -2033,6 +2639,586 @@ function TaskDetail({
   );
 }
 
+export interface SelectOption<T extends string | number = string> {
+  value: T;
+  label: string;
+  color?: string;
+}
+
+export function CustomSelect<T extends string | number>({
+  value,
+  options,
+  onChange,
+  ariaLabel,
+  className = "",
+  alignRight = false,
+  popUp = false,
+  disabled = false,
+  iconOnly = false,
+  triggerIcon,
+}: {
+  value: T;
+  options: SelectOption<T>[];
+  onChange: (value: T) => void;
+  ariaLabel?: string;
+  className?: string;
+  alignRight?: boolean;
+  popUp?: boolean;
+  disabled?: boolean;
+  iconOnly?: boolean;
+  triggerIcon?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((o) => o.value === value) || options[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointer = (event: PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  return (
+    <div className={`custom-select ${className}`} ref={wrapperRef}>
+      <select
+        className="sr-only-select"
+        aria-label={ariaLabel}
+        tabIndex={-1}
+        disabled={disabled}
+        value={String(value)}
+        onChange={(e) => {
+          const found = options.find((o) => String(o.value) === e.target.value);
+          if (found) onChange(found.value);
+        }}
+      >
+        {options.map((opt) => (
+          <option key={String(opt.value)} value={String(opt.value)}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className={`custom-select-trigger ${iconOnly ? "icon-only" : ""}`}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        title={ariaLabel || selected?.label}
+        style={selected?.color ? { color: selected.color } : undefined}
+        onClick={() => !disabled && setOpen((v) => !v)}
+      >
+        {triggerIcon}
+        {!iconOnly && <span>{selected?.label}</span>}
+        {!iconOnly && <ChevronDown size={13} />}
+      </button>
+      {open && (
+        <div
+          className={`custom-select-popover ${alignRight ? "align-right" : ""} ${popUp ? "pop-up" : ""}`}
+          role="listbox"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          {options.map((opt) => (
+            <button
+              type="button"
+              role="option"
+              aria-selected={opt.value === value}
+              key={String(opt.value)}
+              className={`custom-select-option ${opt.value === value ? "is-selected" : ""}`}
+              onClick={() => {
+                onChange(opt.value);
+                setOpen(false);
+              }}
+            >
+              <span
+                className="custom-select-option-label"
+                style={opt.color ? { color: opt.color } : undefined}
+              >
+                {opt.color && (
+                  <i
+                    className="custom-select-dot"
+                    style={{ background: opt.color }}
+                  />
+                )}
+                {opt.label}
+              </span>
+              {opt.value === value && <Check size={13} />}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TaskDestinationSelect({
+  listId,
+  dueDate,
+  lists,
+  ariaLabel,
+  popUp = false,
+  onChange,
+  onNewList,
+}: {
+  listId: string;
+  dueDate: string | null;
+  lists: TaskList[];
+  ariaLabel: string;
+  popUp?: boolean;
+  onChange: (
+    patch: { listId?: string; dueDate?: string | null },
+    notice?: string,
+  ) => void;
+  onNewList?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const today = localDate();
+  const tomorrow = addDays(today, 1);
+  const nextWeek = addDays(today, 7);
+  const availableLists = lists.filter((l) => !l.archived);
+  const currentList =
+    availableLists.find((l) => l.id === listId) ||
+    lists.find((l) => l.id === listId) ||
+    availableLists[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointer = (event: PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  const scheduleTag =
+    dueDate === today
+      ? "今天"
+      : dueDate === tomorrow
+        ? "明天"
+        : dueDate && dueDate > tomorrow && dueDate <= addDays(today, 6)
+          ? "最近7天"
+          : dueDate
+            ? dateText(dueDate)
+            : "";
+
+  return (
+    <div
+      className="custom-select destination-select"
+      ref={wrapperRef}
+    >
+      <select
+        className="sr-only-select"
+        aria-label={ariaLabel}
+        tabIndex={-1}
+        value={listId}
+        onChange={(e) => onChange({ listId: e.target.value })}
+      >
+        {availableLists.map((l) => (
+          <option key={l.id} value={l.id}>
+            {l.name}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        className="custom-select-trigger destination-trigger"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <i
+          className="custom-select-dot"
+          style={{ background: currentList?.color || "#4772fa" }}
+        />
+        <span className="destination-trigger-text">
+          {currentList?.name || "收集箱"}
+          {scheduleTag && <small> · {scheduleTag}</small>}
+        </span>
+        <ChevronDown size={13} />
+      </button>
+      {open && (
+        <div
+          className={`custom-select-popover destination-popover ${popUp ? "pop-up" : ""}`}
+          role="listbox"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="destination-group-title">快捷排入（智能视图）</div>
+          <button
+            type="button"
+            className={`custom-select-option ${dueDate === today ? "is-selected" : ""}`}
+            onClick={() => {
+              onChange({ dueDate: today }, "已排入「今天」");
+              setOpen(false);
+            }}
+          >
+            <span className="custom-select-option-label">
+              <CalendarDays size={14} />
+              今天
+            </span>
+            {dueDate === today && <Check size={13} />}
+          </button>
+          <button
+            type="button"
+            className={`custom-select-option ${dueDate === tomorrow ? "is-selected" : ""}`}
+            onClick={() => {
+              onChange({ dueDate: tomorrow }, "已排入「最近7天」（明天）");
+              setOpen(false);
+            }}
+          >
+            <span className="custom-select-option-label">
+              <CalendarRange size={14} />
+              明天 · 最近7天
+            </span>
+            {dueDate === tomorrow && <Check size={13} />}
+          </button>
+          <button
+            type="button"
+            className={`custom-select-option ${dueDate === nextWeek ? "is-selected" : ""}`}
+            onClick={() => {
+              onChange({ dueDate: nextWeek }, "已排入下周");
+              setOpen(false);
+            }}
+          >
+            <span className="custom-select-option-label">
+              <CalendarCheck2 size={14} />
+              下周（+7天）
+            </span>
+            {dueDate === nextWeek && <Check size={13} />}
+          </button>
+          <button
+            type="button"
+            className={`custom-select-option ${!dueDate ? "is-selected" : ""}`}
+            onClick={() => {
+              onChange({ dueDate: null, listId: "inbox" }, "已移回「收集箱」（无日期）");
+              setOpen(false);
+            }}
+          >
+            <span className="custom-select-option-label">
+              <Inbox size={14} />
+              仅收集箱（不设日期）
+            </span>
+            {!dueDate && listId === "inbox" && <Check size={13} />}
+          </button>
+          <div className="destination-divider" />
+          <div className="destination-group-title">所属清单</div>
+          {availableLists.map((l) => (
+            <button
+              type="button"
+              key={l.id}
+              className={`custom-select-option ${l.id === listId ? "is-selected" : ""}`}
+              onClick={() => {
+                onChange({ listId: l.id }, `已归入清单「${l.name}」`);
+                setOpen(false);
+              }}
+            >
+              <span className="custom-select-option-label">
+                <i
+                  className="custom-select-dot"
+                  style={{ background: l.color }}
+                />
+                {l.name}
+              </span>
+              {l.id === listId && <Check size={13} />}
+            </button>
+          ))}
+          {onNewList && (
+            <>
+              <div className="destination-divider" />
+              <button
+                type="button"
+                className="custom-select-option destination-new-list"
+                onClick={() => {
+                  setOpen(false);
+                  onNewList();
+                }}
+              >
+                <span className="custom-select-option-label">
+                  <Plus size={14} />
+                  新建清单…
+                </span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CustomDateInput({
+  value,
+  onChange,
+  ariaLabel,
+  placeholder = "选择日期",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  placeholder?: string;
+}) {
+  const today = localDate();
+  const initial = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today;
+  const [open, setOpen] = useState(false);
+  const [viewMonth, setViewMonth] = useState(() => `${initial.slice(0, 7)}-01`);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      setViewMonth(`${value.slice(0, 7)}-01`);
+    }
+  }, [value]);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointer = (event: PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  const [y, m] = viewMonth.split("-").map(Number);
+  const firstOfMonth = new Date(y, m - 1, 1, 12);
+  const offset = (firstOfMonth.getDay() + 6) % 7;
+  const startCell = addDays(viewMonth, -offset);
+  const days = Array.from({ length: 42 }, (_, idx) => addDays(startCell, idx));
+  const shiftMonth = (delta: number) => {
+    const d = new Date(y, m - 1 + delta, 1, 12);
+    setViewMonth(localDate(d));
+  };
+
+  return (
+    <div className="custom-picker" ref={wrapperRef}>
+      <input
+        type="text"
+        value={value}
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        onFocus={() => setOpen(true)}
+        onClick={() => setOpen(true)}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {open && (
+        <div
+          className="custom-picker-popover custom-date-popover"
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="custom-picker-header">
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="上个月"
+              onClick={() => shiftMonth(-1)}
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <strong>
+              {y}年{m}月
+            </strong>
+            <button
+              type="button"
+              className="icon-button"
+              aria-label="下个月"
+              onClick={() => shiftMonth(1)}
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+          <div className="custom-picker-weekdays">
+            {["一", "二", "三", "四", "五", "六", "日"].map((w) => (
+              <span key={w}>{w}</span>
+            ))}
+          </div>
+          <div className="custom-picker-days">
+            {days.map((d) => {
+              const dayNum = Number(d.slice(8, 10));
+              const inMonth = Number(d.slice(5, 7)) === m;
+              const isSelected = d === value;
+              const isToday = d === today;
+              return (
+                <button
+                  type="button"
+                  key={d}
+                  className={`custom-day-cell ${inMonth ? "" : "is-outside"} ${isSelected ? "is-selected" : ""} ${isToday ? "is-today" : ""}`}
+                  onClick={() => {
+                    onChange(d);
+                    setOpen(false);
+                  }}
+                >
+                  {dayNum}
+                </button>
+              );
+            })}
+          </div>
+          <div className="custom-picker-footer">
+            <button
+              type="button"
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
+            >
+              清除
+            </button>
+            <button
+              type="button"
+              className="is-primary"
+              onClick={() => {
+                onChange(today);
+                setOpen(false);
+              }}
+            >
+              今天
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const timeSlots = Array.from({ length: 48 }, (_, idx) => {
+  const hh = String(Math.floor(idx / 2)).padStart(2, "0");
+  const mm = idx % 2 === 0 ? "00" : "30";
+  return `${hh}:${mm}`;
+});
+
+function CustomTimeInput({
+  value,
+  onChange,
+  ariaLabel,
+  placeholder = "选择时间",
+  alignRight = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  ariaLabel: string;
+  placeholder?: string;
+  alignRight?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handlePointer = (event: PointerEvent) => {
+      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointer);
+    document.addEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointer);
+      document.removeEventListener("keydown", handleKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="custom-picker" ref={wrapperRef}>
+      <input
+        type="text"
+        value={value}
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        onFocus={() => setOpen(true)}
+        onClick={() => setOpen(true)}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {open && (
+        <div
+          className={`custom-picker-popover custom-time-popover ${alignRight ? "align-right" : ""}`}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="custom-time-Presets">
+            {["09:00", "12:00", "14:00", "18:00", "20:00"].map((preset) => (
+              <button
+                type="button"
+                key={preset}
+                className={value === preset ? "is-selected" : ""}
+                onClick={() => {
+                  onChange(preset);
+                  setOpen(false);
+                }}
+              >
+                {preset}
+              </button>
+            ))}
+          </div>
+          <div className="custom-time-list">
+            {timeSlots.map((slot) => (
+              <button
+                type="button"
+                key={slot}
+                className={`custom-time-item ${value === slot ? "is-selected" : ""}`}
+                onClick={() => {
+                  onChange(slot);
+                  setOpen(false);
+                }}
+              >
+                <span>{slot}</span>
+                {value === slot && <Check size={13} />}
+              </button>
+            ))}
+          </div>
+          <div className="custom-picker-footer">
+            <button
+              type="button"
+              onClick={() => {
+                onChange("");
+                setOpen(false);
+              }}
+            >
+              清除
+            </button>
+            <button
+              type="button"
+              className="is-primary"
+              onClick={() => {
+                const now = new Date();
+                const hh = String(now.getHours()).padStart(2, "0");
+                const mm = String(Math.floor(now.getMinutes() / 15) * 15).padStart(
+                  2,
+                  "0",
+                );
+                onChange(`${hh}:${mm}`);
+                setOpen(false);
+              }}
+            >
+              现在
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewTaskDialog({
   data,
   defaultList,
@@ -2041,6 +3227,7 @@ function NewTaskDialog({
   defaultTime,
   onClose,
   onCreate,
+  onNewList,
 }: {
   data: AppData;
   defaultList: string;
@@ -2049,6 +3236,7 @@ function NewTaskDialog({
   defaultTime?: string;
   onClose: () => void;
   onCreate: (task: Partial<Task> & { title: string }) => void;
+  onNewList?: () => void;
 }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -2116,36 +3304,34 @@ function NewTaskDialog({
         <div className="new-task-options">
           <label>
             <CalendarDays size={15} />
-            <input
-              type="date"
+            <CustomDateInput
               value={due}
-              aria-label="新任务日期"
-              onChange={(e) => setDue(e.target.value)}
+              ariaLabel="新任务日期"
+              onChange={setDue}
             />
           </label>
           <label>
             <Clock3 size={15} />
-            <input
-              type="time"
-              aria-label="新任务时间"
+            <CustomTimeInput
               value={time}
-              onChange={(e) => setTime(e.target.value)}
+              ariaLabel="新任务时间"
+              onChange={setTime}
             />
           </label>
-          <label>
+          <div className="new-task-option-item">
             <Flag size={15} />
-            <select
+            <CustomSelect
               value={priority}
-              aria-label="新任务优先级"
-              onChange={(e) => setPriority(Number(e.target.value) as Priority)}
-            >
-              {priorities.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
+              ariaLabel="新任务优先级"
+              alignRight
+              options={priorities.map((p) => ({
+                value: p.value,
+                label: p.label,
+                color: p.color,
+              }))}
+              onChange={(val) => setPriority(val as Priority)}
+            />
+          </div>
         </div>
         {error && (
           <p className="form-error" role="alert">
@@ -2153,19 +3339,17 @@ function NewTaskDialog({
           </p>
         )}
         <div className="dialog-footer">
-          <select
-            value={list}
-            aria-label="新任务所属清单"
-            onChange={(e) => setList(e.target.value)}
-          >
-            {data.lists
-              .filter((l) => !l.archived)
-              .map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-          </select>
+          <TaskDestinationSelect
+            listId={list}
+            dueDate={due || null}
+            lists={data.lists}
+            ariaLabel="新任务所属清单"
+            onNewList={onNewList}
+            onChange={(patch) => {
+              if (patch.listId !== undefined) setList(patch.listId);
+              if (patch.dueDate !== undefined) setDue(patch.dueDate || "");
+            }}
+          />
           <button className="text-button" type="button" onClick={onClose}>
             取消
           </button>
@@ -2251,61 +3435,54 @@ function DateDialog({
         </div>
         <label>
           日期
-          <input
-            aria-label="截止日期"
-            type="date"
+          <CustomDateInput
+            ariaLabel="截止日期"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={setDate}
           />
         </label>
         <div className="date-two-columns">
           <label>
             开始日期（可选）
-            <input
-              aria-label="开始日期"
-              type="date"
+            <CustomDateInput
+              ariaLabel="开始日期"
               value={start}
-              onChange={(e) => setStart(e.target.value)}
+              onChange={setStart}
+              placeholder="可选开始日期"
             />
           </label>
           <label>
             时间
-            <input
-              aria-label="任务时间"
-              type="time"
+            <CustomTimeInput
+              ariaLabel="任务时间"
               value={time}
-              onChange={(e) => setTime(e.target.value)}
+              onChange={setTime}
+              alignRight
             />
           </label>
         </div>
-        <label className="select-row">
+        <div className="select-row">
           <RotateCcw size={16} />
           重复
-          <select
+          <CustomSelect
+            ariaLabel="重复"
+            alignRight
             value={repeat}
-            onChange={(e) => setRepeat(e.target.value as RepeatRule)}
-          >
-            {repeats.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="select-row">
+            options={repeats}
+            onChange={(val) => setRepeat(val as RepeatRule)}
+          />
+        </div>
+        <div className="select-row">
           <Bell size={16} />
           提醒
-          <select
+          <CustomSelect
+            ariaLabel="提醒"
+            alignRight
             value={reminder}
-            onChange={(e) => setReminder(e.target.value as Reminder)}
-          >
-            {reminders.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            options={reminders}
+            onChange={(val) => setReminder(val as Reminder)}
+          />
+        </div>
         {error && (
           <p className="form-error" role="alert">
             {error}
@@ -2408,20 +3585,18 @@ function ListDialog({
                 </button>
               ))}
             </div>
-            <label>
-              所在文件夹
-              <select
+            <div className="field-group">
+              <span>所在文件夹</span>
+              <CustomSelect
+                ariaLabel="所在文件夹"
                 value={folderId}
-                onChange={(e) => setFolder(e.target.value)}
-              >
-                <option value="">无</option>
-                {data.folders.map((f) => (
-                  <option key={f.id} value={f.id}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+                options={[
+                  { value: "", label: "无" },
+                  ...data.folders.map((f) => ({ value: f.id, label: f.name })),
+                ]}
+                onChange={(val) => setFolder(String(val))}
+              />
+            </div>
           </>
         )}
         <div className="dialog-footer">
@@ -2436,6 +3611,72 @@ function ListDialog({
           </button>
           <button className="primary-button" type="submit">
             保存
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function TagDialog({
+  mode,
+  initialName,
+  onClose,
+  onSave,
+  onDelete,
+}: {
+  mode: "create" | "edit";
+  initialName: string;
+  onClose: () => void;
+  onSave: (name: string) => void;
+  onDelete?: () => void;
+}) {
+  const [name, setName] = useState(initialName);
+  return (
+    <div className="modal-backdrop" onMouseDown={onClose}>
+      <form
+        className="dialog"
+        onMouseDown={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          const clean = name.trim().replace(/^#+/, "").trim();
+          if (clean) onSave(clean);
+        }}
+      >
+        <div className="dialog-header">
+          <h2>{mode === "create" ? "添加标签" : "编辑标签"}</h2>
+          <IconButton label="关闭标签设置" onClick={onClose}>
+            <X size={18} />
+          </IconButton>
+        </div>
+        <label>
+          标签名称
+          <input
+            autoFocus
+            aria-label="标签名称"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={100}
+            placeholder="例如：工作、读书、紧急（无需输入 #）"
+            required
+          />
+        </label>
+        <div className="dialog-footer">
+          {onDelete && (
+            <button
+              type="button"
+              className="text-button danger"
+              onClick={onDelete}
+            >
+              <Trash2 size={14} />
+              删除标签
+            </button>
+          )}
+          <button type="button" className="text-button" onClick={onClose}>
+            取消
+          </button>
+          <button className="primary-button" type="submit">
+            {mode === "create" ? "添加" : "保存"}
           </button>
         </div>
       </form>
@@ -2501,6 +3742,37 @@ function FilterDialog({
   );
 }
 
+const defaultAgentDocTemplate = `# DitaList 本地 Agent / MCP 配置说明
+
+> 本文档保存在 DitaList「设置 → Agent / MCP」中，支持随时查看、复制或稍后配置。
+> 你可以将以下说明直接发给 Agent（如 Claude Code、Codex、Cursor 等），让 Agent 自动完成 MCP 配置。
+
+## 1. 给 Agent 的一句话指令
+
+请将 DitaList 本地 MCP 服务添加到你的 MCP 配置中，并通过它帮我读取和规划任务。
+
+## 2. MCP 客户端配置示例
+
+\`\`\`json
+{
+  "mcpServers": {
+    "ditalist": {
+      "command": "node",
+      "args": ["<DitaList目录>/resources/app/mcp/server.mjs"]
+    }
+  }
+}
+\`\`\`
+
+## 3. 可用 MCP 工具与确认机制
+
+- dida_list_list_tasks：查询本机任务（支持关键词 query 与 includeDeleted）
+- dida_list_get_task：按任务 ID 读取单条任务
+- dida_list_create_task：创建 Agent 待确认任务（在 DitaList 弹窗等待用户单条或批量确认）
+- dida_list_update_task：修改任务字段
+- dida_list_delete_task：将任务移入垃圾桶（可在垃圾桶恢复）
+`;
+
 function SettingsDialog({
   data,
   info,
@@ -2509,6 +3781,7 @@ function SettingsDialog({
   onExport,
   onImport,
   onReveal,
+  onToast,
   onUnarchive,
 }: {
   data: AppData;
@@ -2518,6 +3791,7 @@ function SettingsDialog({
   onExport: () => void;
   onImport: () => void;
   onReveal: () => void;
+  onToast?: (message: string) => void;
   onUnarchive: (id: string) => void;
 }) {
   const [tab, setTab] = useState("general");
@@ -2525,6 +3799,11 @@ function SettingsDialog({
   const [desktopShortcutStatus, setDesktopShortcutStatus] = useState<
     "checking" | "missing" | "exists" | "error"
   >("checking");
+  const [agentDoc, setAgentDoc] = useState<AgentDocumentInfo | null>(null);
+  const [copiedAgentDoc, setCopiedAgentDoc] = useState(false);
+  const [agentNotice, setAgentNotice] = useState(
+    "你可以现在复制配置说明发给 Agent，也可以稍后配置；说明文案会一直保留在这里。",
+  );
   useEffect(() => {
     if (info?.kind !== "desktop" || !window.didaLocal?.getDesktopShortcut) {
       setDesktopShortcutStatus("missing");
@@ -2535,6 +3814,74 @@ function SettingsDialog({
       .then((exists) => setDesktopShortcutStatus(exists ? "exists" : "missing"))
       .catch(() => setDesktopShortcutStatus("error"));
   }, [info?.kind]);
+  useEffect(() => {
+    if (info?.kind !== "desktop" || !window.didaLocal?.generateAgentDocument)
+      return;
+    void window.didaLocal
+      .generateAgentDocument()
+      .then((doc) => setAgentDoc(doc))
+      .catch((error) =>
+        setAgentNotice(
+          `生成 Agent 说明文档失败：${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+  }, [info?.kind]);
+
+  async function refreshAgentDoc() {
+    if (!window.didaLocal?.generateAgentDocument) return;
+    try {
+      const doc = await window.didaLocal.generateAgentDocument();
+      setAgentDoc(doc);
+      setAgentNotice(`已生成最新说明文档：${doc.path}`);
+      onToast?.("已更新本地 Agent 配置说明文档");
+    } catch (error) {
+      setAgentNotice(
+        `生成失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async function copyAgentDoc() {
+    try {
+      if (window.didaLocal?.copyAgentDocument) {
+        const result = await window.didaLocal.copyAgentDocument();
+        if (!agentDoc && window.didaLocal.generateAgentDocument) {
+          setAgentDoc(await window.didaLocal.generateAgentDocument());
+        }
+        setAgentNotice(`已复制完整配置说明（文档位置：${result.path}）`);
+      } else {
+        await navigator.clipboard.writeText(
+          agentDoc?.content || defaultAgentDocTemplate,
+        );
+        setAgentNotice("已复制 Agent 配置说明到剪贴板。");
+      }
+      setCopiedAgentDoc(true);
+      setTimeout(() => setCopiedAgentDoc(false), 2000);
+      onToast?.("已复制 Agent 配置说明，可直接发给 Agent");
+    } catch (error) {
+      setAgentNotice(
+        `复制失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  async function openAgentDocDir() {
+    if (!window.didaLocal?.openAgentDocumentDirectory) return;
+    try {
+      await window.didaLocal.openAgentDocumentDirectory();
+    } catch (error) {
+      setAgentNotice(
+        `打开目录失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  function deferAgentSetup() {
+    setAgentNotice(
+      "已选择稍后配置。本页说明与本地 DitaList-Agent.md 会一直保留，随时可回来复制给 Agent。",
+    );
+    onToast?.("可随时在「设置 → Agent / MCP」中查看或复制 Agent 配置说明");
+  }
 
   async function createDesktopShortcut() {
     try {
@@ -2563,6 +3910,7 @@ function SettingsDialog({
             { id: "appearance", label: "外观", icon: Sun },
             { id: "focus", label: "专注", icon: Clock3 },
             { id: "data", label: "数据与备份", icon: ShieldCheck },
+             { id: "agent", label: "Agent / MCP", icon: Bot },
           ].map((t) => (
             <button
               key={t.id}
@@ -2577,7 +3925,7 @@ function SettingsDialog({
             <span className="app-mark">
               <img src="./icon.svg" alt="" />
             </span>
-            <strong>本地清单</strong>
+            <strong>DitaList</strong>
             <small>离线使用 · 数据留在本机</small>
           </div>
         </aside>
@@ -2591,6 +3939,7 @@ function SettingsDialog({
                     appearance: "外观",
                     focus: "专注",
                     data: "数据与备份",
+                     agent: "Agent / MCP",
                   } as Record<string, string>
                 )[tab]
               }
@@ -2601,40 +3950,40 @@ function SettingsDialog({
           </div>
           {tab === "general" && (
             <>
-              <label className="setting-row">
+              <div className="setting-row">
                 <span>启动时显示</span>
-                <select
+                <CustomSelect
+                  ariaLabel="启动时显示"
+                  alignRight
                   value={data.settings.defaultView}
-                  onChange={(e) =>
-                    onChange({ defaultView: e.target.value as ViewId })
-                  }
-                >
-                  {[
-                    "today",
-                    "next7",
-                    "inbox",
-                    "calendar",
-                    "focus",
-                    "habits",
-                  ].map((v) => (
-                    <option value={v} key={v}>
-                      {labels[v]}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="setting-row">
+                  options={(
+                    [
+                      "today",
+                      "next7",
+                      "inbox",
+                      "calendar",
+                      "focus",
+                      "habits",
+                    ] as ViewId[]
+                  ).map((v) => ({ value: v, label: labels[v] }))}
+                  onChange={(val) => onChange({ defaultView: val as ViewId })}
+                />
+              </div>
+              <div className="setting-row">
                 <span>每周开始于</span>
-                <select
+                <CustomSelect
+                  ariaLabel="每周开始于"
+                  alignRight
                   value={data.settings.weekStart}
-                  onChange={(e) =>
-                    onChange({ weekStart: Number(e.target.value) as 0 | 1 })
+                  options={[
+                    { value: 1, label: "星期一" },
+                    { value: 0, label: "星期日" },
+                  ]}
+                  onChange={(val) =>
+                    onChange({ weekStart: Number(val) as 0 | 1 })
                   }
-                >
-                  <option value={1}>星期一</option>
-                  <option value={0}>星期日</option>
-                </select>
-              </label>
+                />
+              </div>
               <label className="setting-row">
                 <span>显示已完成任务</span>
                 <input
@@ -2690,38 +4039,43 @@ function SettingsDialog({
                   </button>
                 </div>
               </div>
-              <label className="setting-row">
+              <div className="setting-row">
                 <span>默认清单</span>
-                <select
+                <CustomSelect
+                  ariaLabel="默认清单"
+                  alignRight
                   value={data.settings.floatingDefaultListId}
-                  onChange={(e) =>
-                    onChange({ floatingDefaultListId: e.target.value })
-                  }
-                >
-                  {data.lists
+                  options={data.lists
                     .filter((list) => !list.archived)
-                    .map((list) => (
-                      <option value={list.id} key={list.id}>
-                        {list.name}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <label className="setting-row">
+                    .map((list) => ({
+                      value: list.id,
+                      label: list.name,
+                      color: list.color,
+                    }))}
+                  onChange={(val) =>
+                    onChange({ floatingDefaultListId: String(val) })
+                  }
+                />
+              </div>
+              <div className="setting-row">
                 <span>默认日期</span>
-                <select
+                <CustomSelect
+                  ariaLabel="默认日期"
+                  alignRight
                   value={data.settings.floatingDefaultDate}
-                  onChange={(e) =>
+                  options={[
+                    { value: "none", label: "不设置日期" },
+                    { value: "today", label: "今天" },
+                    { value: "tomorrow", label: "明天" },
+                  ]}
+                  onChange={(val) =>
                     onChange({
-                      floatingDefaultDate: e.target.value as AppData["settings"]["floatingDefaultDate"],
+                      floatingDefaultDate:
+                        val as AppData["settings"]["floatingDefaultDate"],
                     })
                   }
-                >
-                  <option value="none">不设置日期</option>
-                  <option value="today">今天</option>
-                  <option value="tomorrow">明天</option>
-                </select>
-              </label>
+                />
+              </div>
               <p className="setting-caption">
                 单击右下角托盘图标或按快捷键打开悬浮窗。输入中的日期和时间会覆盖默认日期。
               </p>
@@ -2893,7 +4247,7 @@ function SettingsDialog({
                   <Upload size={19} />
                   <span>
                     <strong>导入数据</strong>
-                    <small>支持本地清单 JSON、滴答清单 CSV</small>
+                    <small>支持 DitaList JSON、滴答清单 CSV</small>
                   </span>
                   <ChevronRight size={16} />
                 </button>
@@ -2912,6 +4266,110 @@ function SettingsDialog({
               <p className="setting-caption">
                 不同设备各自保存数据。需要迁移时，在原设备导出备份，再到另一台设备导入。请保留一份独立备份。
               </p>
+            </>
+          )}
+          {tab === "agent" && (
+            <>
+              <div className="data-status">
+                <Bot size={23} />
+                <div>
+                  <strong>把链接或说明交给 Agent 即可完成配置</strong>
+                  <p>{agentNotice}</p>
+                </div>
+              </div>
+              <div className="agent-url-box">
+                <div className="agent-url-info">
+                  <span>MCP 插件链接（Streamable HTTP）</span>
+                  <code>
+                    {agentDoc?.httpUrl || "http://127.0.0.1:27182/mcp"}
+                  </code>
+                </div>
+                <button
+                  type="button"
+                  className="agent-doc-copy-btn"
+                  onClick={() => {
+                    const url =
+                      agentDoc?.httpUrl || "http://127.0.0.1:27182/mcp";
+                    void navigator.clipboard.writeText(url);
+                    setAgentNotice(`已复制 MCP 插件链接：${url}`);
+                    onToast?.("已复制 MCP 插件链接，可直接填入 Agent 框架");
+                  }}
+                >
+                  <Copy size={14} />
+                  <span>复制链接</span>
+                </button>
+              </div>
+              <div className="backup-actions">
+                <button onClick={() => void copyAgentDoc()}>
+                  <Copy size={19} />
+                  <span>
+                    <strong>复制给 Agent 的配置说明</strong>
+                    <small>
+                      一键复制完整 MCP 配置与工具说明，直接粘贴给 Agent 即可
+                    </small>
+                  </span>
+                  <ChevronRight size={16} />
+                </button>
+                {info?.kind === "desktop" && (
+                  <>
+                    <button onClick={() => void refreshAgentDoc()}>
+                      <Sparkles size={19} />
+                      <span>
+                        <strong>重新生成说明文档</strong>
+                        <small>
+                          更新本地 DitaList-Agent.md 中的当前程序与管道路径
+                        </small>
+                      </span>
+                      <ChevronRight size={16} />
+                    </button>
+                    <button onClick={() => void openAgentDocDir()}>
+                      <Folder size={19} />
+                      <span>
+                        <strong>打开说明文档所在目录</strong>
+                        <small>
+                          查看本地生成的 DitaList-Agent.md 文件并交给 Agent 阅读
+                        </small>
+                      </span>
+                      <ChevronRight size={16} />
+                    </button>
+                  </>
+                )}
+                <button onClick={deferAgentSetup}>
+                  <Clock3 size={19} />
+                  <span>
+                    <strong>稍后配置 Agent</strong>
+                    <small>
+                      暂不配置也不影响使用；本页说明文案会一直保留在设置中
+                    </small>
+                  </span>
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+              {agentDoc?.path && (
+                <p className="data-location">
+                  说明文档路径：{agentDoc.path}
+                </p>
+              )}
+              <div className="agent-doc-header">
+                <div className="setting-subheading">
+                  说明文档全文（常驻保存，可随时复制）
+                </div>
+                <button
+                  type="button"
+                  className="agent-doc-copy-btn"
+                  aria-label="复制说明文档全文"
+                  onClick={() => void copyAgentDoc()}
+                >
+                  {copiedAgentDoc ? <Check size={14} /> : <Copy size={14} />}
+                  <span>{copiedAgentDoc ? "已复制全文" : "复制全文"}</span>
+                </button>
+              </div>
+              <textarea
+                className="agent-doc-textarea"
+                aria-label="Agent 配置说明文案"
+                readOnly
+                value={agentDoc?.content || defaultAgentDocTemplate}
+              />
             </>
           )}
         </div>

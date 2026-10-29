@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
-import { createHash } from 'node:crypto';
+import net from 'node:net';
+import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { chromium, _electron } from 'playwright';
 
@@ -133,7 +134,12 @@ async function targetedBrowserCases(today, month) {
   let timedTaskId;
   let movedDay = `${month}-01`;
   await step('时段双击新建预填小时与15分钟拖移', async () => {
-    await navigation('日历').click(); await page.getByLabel('选择日历月份', { exact: true }).fill(month);
+    await navigation('日历').click();
+    await page.locator('.cal-title-picker-button').click();
+    await page.locator('.cal-month-popover').waitFor();
+    await page.locator('.cal-month-popover-footer').getByRole('button', { name: '回到本月', exact: true }).click();
+    await page.getByLabel('选择日历月份', { exact: true }).fill(month);
+    assert.equal(await page.locator('input[type="month"], input[type="date"], input[type="time"]').count(), 0);
     await page.locator(`.cal-mini-dates button[aria-label="${month}-01"]`).click();
     await page.getByRole('group', { name: '日历视图' }).getByRole('button', { name: '日', exact: true }).click();
     const ninthHour = page.locator('.cal-time-column').first().locator('.cal-hour-cell').nth(9);
@@ -434,8 +440,27 @@ try {
       const dataDir = path.join(reportDir, 'electron-isolated-data');
       const desktopShortcutDir = path.join(reportDir, 'desktop-shortcut');
       await fs.mkdir(desktopShortcutDir, { recursive: true });
-      const environment = { ...process.env, DIDA_LOCAL_HEADLESS: '1', DIDA_LOCAL_DATA_DIR: dataDir, DIDA_LOCAL_DESKTOP_DIR: desktopShortcutDir };
+      const mcpPipe = process.platform === 'win32'
+        ? `\\\\.\\pipe\\DitaListSmoke-${randomUUID()}`
+        : path.join(dataDir, 'DitaList.mcp.sock');
+      const environment = { ...process.env, DIDA_LOCAL_HEADLESS: '1', DIDA_LOCAL_DATA_DIR: dataDir, DIDA_LOCAL_DESKTOP_DIR: desktopShortcutDir, DIDA_LOCAL_MCP_PIPE: mcpPipe };
       delete environment.ELECTRON_RUN_AS_NODE;
+      const mcpRequest = (method, params = {}) => new Promise((resolve, reject) => {
+        const socket = net.createConnection(mcpPipe);
+        let buffer = '';
+        socket.setEncoding('utf8');
+        socket.on('connect', () => socket.write(`${JSON.stringify({ id: randomUUID(), method, params })}\n`));
+        socket.on('data', chunk => {
+          buffer += chunk;
+          const idx = buffer.indexOf('\n');
+          if (idx < 0) return;
+          socket.end();
+          const res = JSON.parse(buffer.slice(0, idx));
+          if (res.ok) resolve(res.result);
+          else reject(new Error(res.error || 'MCP error'));
+        });
+        socket.on('error', reject);
+      });
       const options = { executablePath: packagedExecutable || path.join(root, 'node_modules', 'electron', 'dist', 'electron.exe'), args: packagedExecutable ? [] : [root], env: environment, timeout: 60000 };
       report.electron = { executable: options.executablePath, args: options.args, dataDir, startsHidden: true };
       report.electron.runtimeSources = [];
@@ -451,7 +476,7 @@ try {
         const status = await value.evaluate(({ app, BrowserWindow }) => ({ appName: app.getName(), profile: app.getPath('userData'), appPath: app.getAppPath(), versions: { electron: process.versions.electron, chrome: process.versions.chrome }, windows: BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), title: w.getTitle(), url: w.webContents.getURL() })) }));
         assert.equal(status.appName, 'DitaList', 'Electron 应用名必须使用产品名');
         assert.ok(status.profile.startsWith(dataDir), 'Electron必须使用隔离资料路径');
-        assert.equal(status.windows.length, 1, '应只创建一个本地清单测试窗口');
+        assert.equal(status.windows.length, 1, '应只创建一个 DitaList 测试窗口');
         assert.equal(status.windows[0].title, 'DitaList', '窗口标题必须使用产品名');
         assert.ok(status.windows.every(w => !w.visible), '测试窗口不能显示到用户桌面');
         launches.push(status);
@@ -471,6 +496,19 @@ try {
         const windowControlButtons = page.locator('.window-controls button');
         assert.equal(await windowControlButtons.count(), 3, '桌面窗口必须显示三个窗口控件');
         assert.deepEqual(await windowControlButtons.evaluateAll(buttons => buttons.map(button => getComputedStyle(button).getPropertyValue('-webkit-app-region'))), ['no-drag', 'no-drag', 'no-drag'], '窗口控件不能位于拖拽区域');
+        const dragCheck = await page.evaluate(() => {
+          const controls = document.querySelector('.window-controls');
+          const cRect = controls.getBoundingClientRect();
+          const dragElements = [...document.querySelectorAll('*')].filter(el => getComputedStyle(el).getPropertyValue('-webkit-app-region') === 'drag');
+          const overlapping = dragElements.filter(el => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.left < cRect.right && r.right > cRect.left && r.top < cRect.bottom && r.bottom > cRect.top;
+          });
+          const afterControls = dragElements.filter(el => !(controls.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_PRECEDING));
+          return { overlapping: overlapping.map(el => el.className), afterControls: afterControls.map(el => el.className) };
+        });
+        assert.deepEqual(dragCheck.overlapping, [], '任何 drag 区域都不能与右上角窗口按钮矩形重叠');
+        assert.deepEqual(dragCheck.afterControls, [], 'window-controls 在 DOM 树中必须位于所有 drag 元素之后');
         await page.getByTitle('最大化或还原').click();
         await new Promise(resolve => setTimeout(resolve, 80));
         assert.equal(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized()), true, '最大化按钮必须改变窗口状态');
@@ -532,11 +570,69 @@ try {
         await page.locator('.shortcut-capture').first().click();
         await page.locator('.shortcut-capture').first().press('Control+Shift+J');
         assert.equal(await page.locator('.shortcut-capture').first().innerText(), 'Ctrl+Shift+J');
+        await page.locator('.settings-nav').getByRole('button', { name: 'Agent / MCP', exact: true }).click();
+        const agentDocBox = page.getByRole('textbox', { name: 'Agent 配置说明文案', exact: true });
+        await agentDocBox.waitFor();
+        const agentDocFile = path.join(dataDir, 'agent', 'DitaList-Agent.md');
+        for (let attempt = 0; attempt < 40; attempt++) {
+          try {
+            await fs.access(agentDocFile);
+            break;
+          } catch {
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+        }
+        const docText = await fs.readFile(agentDocFile, 'utf8');
+        assert.match(docText, /DitaList 本地 Agent \/ MCP 配置说明/);
+        assert.match(docText, /streamable-http/);
+        assert.match(docText, /mcp[\\/]+server\.mjs/);
+        assert.equal(await agentDocBox.inputValue(), docText);
+        await page.getByRole('button', { name: /稍后配置 Agent/ }).click();
+        const inlineCopyBtn = page.getByRole('button', { name: '复制说明文档全文', exact: true });
+        await inlineCopyBtn.click();
+        await inlineCopyBtn.filter({ hasText: '已复制全文' }).waitFor();
         await page.getByRole('button', { name: '关闭设置' }).click();
+        await saved();
+        const createdViaMcp = await mcpRequest('tasks.create', { title: 'MCP规划待确认任务', content: '由Agent规划并等待用户确认' });
+        assert.equal(createdViaMcp.needsApproval, true);
+        assert.equal(createdViaMcp.task.createdBy, 'agent');
+        assert.equal(createdViaMcp.task.agentStatus, 'pending');
+        await page.locator('.agent-review-dialog').waitFor();
+        const reviewItemDirection = await page.locator('.agent-review-item').first().evaluate(el => getComputedStyle(el).flexDirection);
+        assert.equal(reviewItemDirection, 'row', 'Agent任务确认卡片必须为横向紧凑布局');
+        await page.locator('.agent-review-dialog').getByRole('button', { name: /确认选中/ }).click();
+        await saved();
+        const approvedViaMcp = await mcpRequest('tasks.get', { id: createdViaMcp.task.id });
+        assert.equal(approvedViaMcp.task.agentStatus, 'approved');
+        await page.locator('[data-nav-id="inbox"]').click();
+        const mcpRow = page.locator('.task-row').filter({ hasText: 'MCP规划待确认任务' });
+        await mcpRow.click();
+        assert.ok(await page.locator('[data-nav-id="today"].drop-candidate').count() > 0, '选中任务时可拖动目标必须显示虚线标注');
+        assert.ok(await page.locator('[data-nav-id="next7"].drop-candidate').count() > 0, '选中任务时最近7天必须显示虚线标注');
+        await mcpRow.dragTo(page.locator('[data-nav-id="today"]'));
+        await saved();
+        const afterTodayDrop = await mcpRequest('tasks.get', { id: createdViaMcp.task.id });
+        assert.ok(afterTodayDrop.task.dueDate, '拖动到今天必须设置任务日期');
+        await page.locator('[data-nav-id="today"]').click();
+        await page.locator('.task-row').filter({ hasText: 'MCP规划待确认任务' }).dragTo(page.locator('[data-nav-id="next7"]'));
+        await saved();
+        const afterNext7Drop = await mcpRequest('tasks.get', { id: createdViaMcp.task.id });
+        assert.ok(afterNext7Drop.task.dueDate > afterTodayDrop.task.dueDate, '拖动到最近7天必须排入后续日期');
+        await page.getByRole('button', { name: '新建标签', exact: true }).click();
+        await page.getByRole('textbox', { name: '标签名称', exact: true }).fill('效率');
+        await page.locator('.dialog').getByRole('button', { name: '添加', exact: true }).click();
+        await page.locator('[data-nav-id="tag:效率"]').waitFor();
+        await page.locator('[data-nav-id="tag:效率"]').dblclick();
+        await page.getByRole('textbox', { name: '标签名称', exact: true }).fill('高效');
+        await page.locator('.dialog').getByRole('button', { name: '保存', exact: true }).click();
+        await page.locator('[data-nav-id="tag:高效"]').waitFor();
+        await page.locator('[data-nav-id="tag:高效"]').dblclick();
+        await page.locator('.dialog').getByRole('button', { name: '删除标签', exact: true }).click();
+        assert.equal(await page.locator('[data-nav-id="tag:高效"]').count(), 0);
         await saved();
         await page.evaluate(() => window.didaLocal.openFloating());
         let floatingPage;
-        for (let attempt = 0; attempt < 40 && !floatingPage; attempt++) {
+        for (let attempt = 0; attempt < 120 && !floatingPage; attempt++) {
           floatingPage = app.windows().find(candidate => candidate !== page);
           if (!floatingPage) await new Promise(resolve => setTimeout(resolve, 25));
         }
@@ -547,7 +643,7 @@ try {
         await floatingPage.getByRole('textbox', { name: '快速添加任务' }).fill('悬浮窗验收');
         await floatingPage.getByRole('button', { name: '添加任务' }).click();
         let floatingState;
-        for (let attempt = 0; attempt < 40; attempt++) {
+        for (let attempt = 0; attempt < 120; attempt++) {
           floatingState = await page.evaluate(() => window.didaLocal.load());
           if (floatingState.data.tasks.some(task => task.title === '悬浮窗验收' && task.dueDate > disk.tasks[0].dueDate)) break;
           await new Promise(resolve => setTimeout(resolve, 25));

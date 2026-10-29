@@ -45,6 +45,8 @@ export interface Task {
   updatedAt: string;
   sortOrder: number;
   pinned: boolean;
+  createdBy: "user" | "agent";
+  agentStatus: "pending" | "approved";
 }
 export interface TaskList {
   id: string;
@@ -99,6 +101,7 @@ export interface Settings {
   floatingShortcut: string;
   floatingDefaultListId: string;
   floatingDefaultDate: "none" | "today" | "tomorrow";
+  customTags?: string[];
 }
 export interface AppData {
   schemaVersion: 1;
@@ -115,12 +118,23 @@ export interface StorageInfo {
   path: string;
   backupPath?: string;
 }
+export interface AgentDocumentInfo {
+  path: string;
+  directory: string;
+  mcpServerPath: string;
+  pipePath: string;
+  httpUrl?: string;
+  content: string;
+}
 export interface DesktopBridge {
   load(): Promise<{ data: AppData | null; info: StorageInfo }>;
   save(data: AppData): Promise<void>;
   exportBackup(data: AppData): Promise<boolean>;
   importBackup(): Promise<string | null>;
   revealData(): Promise<void>;
+  generateAgentDocument(): Promise<AgentDocumentInfo>;
+  copyAgentDocument(): Promise<{ path: string; copied: boolean }>;
+  openAgentDocumentDirectory(): Promise<{ path: string }>;
   notify(title: string, body: string): Promise<void>;
   setFloatingShortcut(shortcut: string): Promise<boolean>;
   getDesktopShortcut(): Promise<boolean>;
@@ -132,6 +146,11 @@ export interface DesktopBridge {
   openMain(): void;
   submitQuickAdd(text: string): void;
   onQuickAdd(listener: (text: string) => void): () => void;
+  onExternalData(listener: (payload: {
+    data: AppData;
+    reason: string;
+    taskIds?: string[];
+  }) => void): () => void;
 }
 declare global {
   interface Window {

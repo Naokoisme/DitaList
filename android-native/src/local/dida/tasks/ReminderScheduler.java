@@ -74,7 +74,7 @@ final class ReminderScheduler {
   }
 
   static void notify(Context context, int id, String title, String body) {
-    if (!canNotify(context)) throw new SecurityException("系统通知未开启，请在系统设置中允许本地清单发送通知");
+    if (!canNotify(context)) throw new SecurityException("系统通知未开启，请在系统设置中允许DitaList发送通知");
     NotificationManager manager = context.getSystemService(NotificationManager.class);
     manager.createNotificationChannel(new NotificationChannel(CHANNEL, "任务与专注提醒", NotificationManager.IMPORTANCE_DEFAULT));
     PendingIntent open = PendingIntent.getActivity(context, 0, new Intent(context, MainActivity.class), PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);

@@ -6,7 +6,7 @@ Naoko 的个人离线任务管理应用，面向 Windows 和 Android。任务、
 
 ## 直接使用
 
-- Windows：双击 `启动本地清单.cmd`，或运行便携目录中的 `本地清单.exe`。便携目录需要整体保留，不要只拷贝 EXE。
+- Windows：双击 `启动DitaList.cmd`，或运行便携目录中的 `DitaList.exe`。便携目录需要整体保留，不要只拷贝 EXE。
 - Android：安装构建生成的 APK。最低 Android 8.0，使用系统 WebView，不申请联网权限。
 - 数据导入：在“设置 → 数据与备份 → 导入数据”中选择 CSV 任务列表或 JSON 备份。导入会合并现有内容，并保留无法转换的复杂规则原文。
 

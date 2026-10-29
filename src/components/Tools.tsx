@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import type { AppData, Habit, Priority, Task } from "../model";
+import { CustomSelect } from "../App";
 
 const dayKey = (d = new Date()) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -222,7 +223,7 @@ export function FocusView({
         }
         if (data.settings.notifications && window.didaLocal)
           void window.didaLocal.notify(
-            "本地清单",
+            "DitaList",
             mode === "focus" ? "专注已完成，休息一下吧。" : "休息结束。",
           );
       }
@@ -284,19 +285,17 @@ export function FocusView({
             休息
           </button>
         </div>
-        <select
+        <CustomSelect
           className="focus-task-select"
+          ariaLabel="选择专注任务"
           value={taskId}
           disabled={running}
-          onChange={(e) => setTaskId(e.target.value)}
-        >
-          <option value="">自由专注</option>
-          {activeTasks.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.title}
-            </option>
-          ))}
-        </select>
+          options={[
+            { value: "", label: "自由专注" },
+            ...activeTasks.map((t) => ({ value: t.id, label: t.title })),
+          ]}
+          onChange={(val) => setTaskId(String(val))}
+        />
         <div
           className={`timer-dial ${running ? "running" : ""}`}
           style={

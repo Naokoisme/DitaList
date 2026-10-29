@@ -1,6 +1,6 @@
 # Android 离线壳
 
-本模块将项目 `dist` 的实际生产界面打包到原生 Android WebView。最低 Android 8.0，需较新的 Android System WebView（建议 Chromium 111 及以后）；应用标识 `local.dida.tasks`，应用名“本地清单”。清单数据保存在应用私有目录，备份通过系统文档选择器读写。
+本模块将项目 `dist` 的实际生产界面打包到原生 Android WebView。最低 Android 8.0，需较新的 Android System WebView（建议 Chromium 111 及以后）；应用标识 `local.dida.tasks`，应用名“DitaList”。清单数据保存在应用私有目录，备份通过系统文档选择器读写。
 
 应用未声明 `INTERNET` 权限。`https://dida.local` 只是由 WebView 在本机拦截并返回 APK 内资产的固定来源，不连接网络或服务器。桥接脚本先于 React 执行，所有返回内容经 JSON 编码，不执行备份中的脚本。
 
@@ -17,7 +17,7 @@ pwsh -File scripts/build-android.ps1
 
 脚本使用固定版本的官方 OpenJDK 与 Google Android SDK Build Tools/Platform。工具下载到 `tools/android`，首次下载核对官方校验和；以后核对已提取工具的 SHA-256。不会修改系统环境变量，也不需要 Android Studio、Gradle、模拟器或 NDK。
 
-安装包为 `release/本地清单-Android.apk`。签名密钥 `android-native/private/local-release.jks` 及随机生成的密码文件 `android-native/private/signing-password.txt` 不提交 Git，必须长期保留，否则后续安装包无法作为同一应用升级。密码通过临时进程环境变量传给签名工具，不进入命令行或构建日志。该密钥是个人开发包签名，不是公开发行渠道的正式签名服务。
+安装包为 `release/DitaList-Android.apk`。签名密钥 `android-native/private/local-release.jks` 及随机生成的密码文件 `android-native/private/signing-password.txt` 不提交 Git，必须长期保留，否则后续安装包无法作为同一应用升级。密码通过临时进程环境变量传给签名工具，不进入命令行或构建日志。该密钥是个人开发包签名，不是公开发行渠道的正式签名服务。
 
 ## 数据与提醒
 

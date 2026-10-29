@@ -253,6 +253,10 @@ export default function CalendarView({
   const [mobileSidebar, setMobileSidebar] = useState(false);
   const [showBacklog, setShowBacklog] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [pickerYear, setPickerYear] = useState(() =>
+    parseDate(anchor).getFullYear(),
+  );
   const [showCompleted, setShowCompleted] = useState(
     data.settings.showCompleted,
   );
@@ -271,6 +275,7 @@ export default function CalendarView({
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const optionsRef = useRef<HTMLDivElement>(null);
+  const monthPickerRef = useRef<HTMLDivElement>(null);
   const settingsWeekStart = data.settings.weekStart;
   const weekdays = Array.from(
     { length: 7 },
@@ -334,6 +339,7 @@ export default function CalendarView({
 
   useEffect(() => {
     setMiniMonth(monthStart(anchor));
+    setPickerYear(parseDate(anchor).getFullYear());
   }, [anchor.slice(0, 7)]);
   useEffect(() => {
     const element = monthViewport.current;
@@ -370,6 +376,22 @@ export default function CalendarView({
       document.removeEventListener("keydown", key);
     };
   }, [showOptions]);
+  useEffect(() => {
+    if (!showMonthPicker) return;
+    const close = (event: PointerEvent) => {
+      if (!monthPickerRef.current?.contains(event.target as Node))
+        setShowMonthPicker(false);
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setShowMonthPicker(false);
+    };
+    document.addEventListener("pointerdown", close);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", close);
+      document.removeEventListener("keydown", key);
+    };
+  }, [showMonthPicker]);
   useEffect(() => {
     const cancelHold = () => {
       if (holdTimer.current) clearTimeout(holdTimer.current);
@@ -664,18 +686,98 @@ export default function CalendarView({
             >
               <Menu size={18} />
             </button>
-            <div className="cal-title-picker">
-              <h1>{mainTitle}</h1>
-              <ChevronDown size={13} />
+            <div className="cal-title-picker" ref={monthPickerRef}>
+              <button
+                type="button"
+                className="cal-title-picker-button"
+                aria-expanded={showMonthPicker}
+                onClick={() => {
+                  setPickerYear(anchorDate.getFullYear());
+                  setShowMonthPicker((v) => !v);
+                }}
+              >
+                <h1>{mainTitle}</h1>
+                <ChevronDown size={13} />
+              </button>
               <input
-                type="month"
+                type="text"
+                className="cal-month-sr-input"
                 aria-label="选择日历月份"
+                tabIndex={-1}
                 value={anchor.slice(0, 7)}
                 onChange={(event) => {
-                  if (/^\d{4}-\d{2}$/.test(event.target.value))
+                  if (/^\d{4}-\d{2}$/.test(event.target.value)) {
                     onAnchorChange(`${event.target.value}-01`);
+                    setShowMonthPicker(false);
+                  }
                 }}
               />
+              {showMonthPicker && (
+                <div
+                  className="cal-month-popover"
+                  role="dialog"
+                  aria-label="选择年份与月份"
+                >
+                  <div className="cal-month-popover-header">
+                    <button
+                      type="button"
+                      className="cal-icon-button"
+                      aria-label="上一年"
+                      onClick={() => setPickerYear((y) => y - 1)}
+                    >
+                      <ChevronLeft size={16} />
+                    </button>
+                    <strong>{pickerYear}年</strong>
+                    <button
+                      type="button"
+                      className="cal-icon-button"
+                      aria-label="下一年"
+                      onClick={() => setPickerYear((y) => y + 1)}
+                    >
+                      <ChevronRight size={16} />
+                    </button>
+                  </div>
+                  <div className="cal-month-popover-grid">
+                    {Array.from({ length: 12 }, (_, idx) => {
+                      const m = idx + 1;
+                      const ym = `${pickerYear}-${String(m).padStart(2, "0")}`;
+                      const selected = anchor.slice(0, 7) === ym;
+                      const current = today.slice(0, 7) === ym;
+                      return (
+                        <button
+                          type="button"
+                          key={m}
+                          className={`cal-month-cell ${selected ? "is-selected" : ""} ${current ? "is-current" : ""}`}
+                          onClick={() => {
+                            onAnchorChange(`${ym}-01`);
+                            setShowMonthPicker(false);
+                          }}
+                        >
+                          {m}月
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="cal-month-popover-footer">
+                    <button
+                      type="button"
+                      onClick={() => setShowMonthPicker(false)}
+                    >
+                      取消
+                    </button>
+                    <button
+                      type="button"
+                      className="is-primary"
+                      onClick={() => {
+                        onAnchorChange(today);
+                        setShowMonthPicker(false);
+                      }}
+                    >
+                      回到本月
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
             <div className="cal-navigation">
               <button
