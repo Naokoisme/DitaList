@@ -721,21 +721,39 @@ export default function App() {
       {info?.kind === "desktop" && (
         <div className="window-controls">
           <button
+            type="button"
+            aria-label="最小化"
             title="最小化"
-            onClick={() => window.didaLocal?.windowAction("minimize")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              window.didaLocal?.windowAction("minimize");
+            }}
           >
             <Minus size={13} />
           </button>
           <button
+            type="button"
+            aria-label="最大化或还原"
             title="最大化或还原"
-            onClick={() => window.didaLocal?.windowAction("maximize")}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              window.didaLocal?.windowAction("maximize");
+            }}
           >
             <Square size={11} />
           </button>
           <button
+            type="button"
             className="close-window"
+            aria-label="关闭窗口"
             title="关闭窗口"
-            onClick={() => void closeWindow()}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              void closeWindow();
+            }}
           >
             <X size={15} />
           </button>
