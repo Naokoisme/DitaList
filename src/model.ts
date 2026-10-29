@@ -96,6 +96,9 @@ export interface Settings {
   breakMinutes: number;
   sound: boolean;
   notifications: boolean;
+  floatingShortcut: string;
+  floatingDefaultListId: string;
+  floatingDefaultDate: "none" | "today" | "tomorrow";
 }
 export interface AppData {
   schemaVersion: 1;
@@ -119,6 +122,7 @@ export interface DesktopBridge {
   importBackup(): Promise<string | null>;
   revealData(): Promise<void>;
   notify(title: string, body: string): Promise<void>;
+  setFloatingShortcut(shortcut: string): Promise<boolean>;
   windowAction(action: "minimize" | "maximize" | "close"): void;
   openFloating(): void;
   closeFloating(): void;

@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("didaLocal", {
   importBackup: () => ipcRenderer.invoke("data:import"),
   revealData: () => ipcRenderer.invoke("data:reveal"),
   notify: (title, body) => ipcRenderer.invoke("notify", title, body),
+  setFloatingShortcut: (shortcut) =>
+    ipcRenderer.invoke("settings:set-floating-shortcut", shortcut),
   windowAction: (action) => ipcRenderer.send("window:action", action),
   openFloating: () => ipcRenderer.send("floating:show"),
   closeFloating: () => ipcRenderer.send("floating:close"),

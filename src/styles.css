@@ -1395,6 +1395,32 @@ textarea::placeholder {
   height: 16px;
   cursor: pointer;
 }
+.shortcut-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.shortcut-capture {
+  min-width: 132px;
+  max-width: 190px;
+  padding: 6px 9px;
+  overflow: hidden;
+  color: var(--muted);
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shortcut-capture:hover,
+.shortcut-capture.capturing {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--soft);
+}
 .setting-caption {
   font-size: 12px;
   color: var(--muted);

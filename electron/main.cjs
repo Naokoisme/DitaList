@@ -37,11 +37,13 @@ const dataDirectory =
 const databasePath = path.join(dataDirectory, "database.json");
 const backupPath = path.join(dataDirectory, "database.backup.json");
 const distDirectory = path.resolve(__dirname, "..", "dist");
+const defaultFloatingShortcut = "CommandOrControl+Alt+Space";
 let mainWindow;
 let floatingWindow;
 let tray;
 let floatingReady = false;
 let floatingRequested = false;
+let activeFloatingShortcut = null;
 let quitting = false;
 let loaded = false;
 let writeQueue = Promise.resolve();
@@ -280,7 +282,29 @@ function createTray() {
   );
   tray.on("click", toggleFloatingWindow);
   tray.on("double-click", showMainWindow);
-  globalShortcut.register("CommandOrControl+Alt+Space", showFloatingWindow);
+  setFloatingShortcut(defaultFloatingShortcut);
+}
+
+function setFloatingShortcut(shortcut) {
+  if (process.env.DIDA_LOCAL_HEADLESS === "1") return true;
+  const next = typeof shortcut === "string" ? shortcut.trim() : "";
+  const previous = activeFloatingShortcut;
+  if (previous) globalShortcut.unregister(previous);
+  activeFloatingShortcut = null;
+  if (!next) return true;
+  try {
+    if (!globalShortcut.register(next, showFloatingWindow)) {
+      if (previous && globalShortcut.register(previous, showFloatingWindow))
+        activeFloatingShortcut = previous;
+      return false;
+    }
+    activeFloatingShortcut = next;
+    return true;
+  } catch {
+    if (previous && globalShortcut.register(previous, showFloatingWindow))
+      activeFloatingShortcut = previous;
+    return false;
+  }
 }
 
 function registerIpc() {
@@ -362,6 +386,11 @@ function registerIpc() {
       throw new Error("通知内容无效");
     if (Notification.isSupported())
       new Notification({ title, body, silent: false }).show();
+  });
+  handle("settings:set-floating-shortcut", (shortcut) => {
+    if (typeof shortcut !== "string" || shortcut.length > 100)
+      throw new Error("快捷键格式无效");
+    return setFloatingShortcut(shortcut);
   });
   ipcMain.on("window:action", (event, action) => {
     try {

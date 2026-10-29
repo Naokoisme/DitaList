@@ -115,6 +115,55 @@ const colors = [
 ];
 const stamp = () => new Date().toISOString();
 
+function shortcutLabel(shortcut: string) {
+  return shortcut
+    .replaceAll("CommandOrControl", "Ctrl")
+    .replaceAll("Command", "⌘")
+    .replaceAll("Control", "Ctrl")
+    .replaceAll("Alt", "Alt")
+    .replaceAll("Shift", "Shift")
+    .replaceAll("Plus", "+")
+    .replaceAll("Space", "空格");
+}
+
+function shortcutFromKeyEvent(event: React.KeyboardEvent) {
+  if (["Control", "Shift", "Alt", "Meta"].includes(event.key)) return null;
+  const modifiers: string[] = [];
+  if (event.ctrlKey || event.metaKey) modifiers.push("CommandOrControl");
+  if (event.altKey) modifiers.push("Alt");
+  if (event.shiftKey) modifiers.push("Shift");
+  if (!modifiers.length) return null;
+  const special: Record<string, string> = {
+    " ": "Space",
+    Escape: "Esc",
+    ArrowUp: "Up",
+    ArrowDown: "Down",
+    ArrowLeft: "Left",
+    ArrowRight: "Right",
+    Enter: "Enter",
+    Tab: "Tab",
+    Backspace: "Backspace",
+    Delete: "Delete",
+    Insert: "Insert",
+    Home: "Home",
+    End: "End",
+    PageUp: "PageUp",
+    PageDown: "PageDown",
+  };
+  const key = special[event.key] ||
+    (event.key.length === 1 ? event.key.toUpperCase() : event.key);
+  if (!key || key === "Unidentified") return null;
+  return [...modifiers, key].join("+");
+}
+
+function floatingDefaultDueDate(
+  value: AppData["settings"]["floatingDefaultDate"],
+) {
+  if (value === "today") return localDate();
+  if (value === "tomorrow") return addDays(localDate(), 1);
+  return null;
+}
+
 function IconButton({
   label,
   children,
@@ -271,6 +320,19 @@ export default function App() {
     m.addEventListener("change", sync);
     return () => m.removeEventListener("change", sync);
   }, [data?.settings.theme, data?.settings.accent]);
+  useEffect(() => {
+    if (
+      info?.kind !== "desktop" ||
+      !data?.settings.floatingShortcut ||
+      !window.didaLocal?.setFloatingShortcut
+    )
+      return;
+    void window.didaLocal
+      .setFloatingShortcut(data.settings.floatingShortcut)
+      .then((ok) => {
+        if (!ok) setToast("快捷键注册失败，可能与其他程序冲突。");
+      });
+  }, [data?.settings.floatingShortcut, info?.kind]);
   const update = useCallback(
     (fn: (s: AppData) => AppData) => setData((s) => (s ? fn(s) : s)),
     [],
@@ -487,14 +549,21 @@ export default function App() {
     return Array.from(result, ([label, tasks]) => ({ label, tasks }));
   }, [openTasks, doneTasks, view]);
 
-  function addTaskFromInput(text: string, overrides: Partial<Task> = {}) {
+  function addTaskFromInput(
+    text: string,
+    overrides: Partial<Task> & { defaultDueDate?: string | null } = {},
+  ) {
+    const { defaultDueDate, ...taskOverrides } = overrides;
     const parsed = parseQuickInput(text, currentListId);
     if (!parsed.title.trim()) return;
     const t = createTask({
       ...parsed,
       listId: currentListId,
       ...(view === "today" && !parsed.dueDate ? { dueDate: localDate() } : {}),
-      ...overrides,
+      ...(defaultDueDate !== undefined && !parsed.dueDate
+        ? { dueDate: defaultDueDate }
+        : {}),
+      ...taskOverrides,
     });
     update((s) => ({
       ...s,
@@ -513,7 +582,19 @@ export default function App() {
   useEffect(() => {
     if (!data || !window.didaLocal?.onQuickAdd) return;
     return window.didaLocal.onQuickAdd((text) => {
-      if (addTaskFromInput(text)) setToast("已从悬浮窗添加任务");
+      const list = data.lists.find(
+        (item) => item.id === data.settings.floatingDefaultListId,
+      );
+      const listId = list && !list.archived ? list.id : "inbox";
+      if (
+        addTaskFromInput(text, {
+          listId,
+          defaultDueDate: floatingDefaultDueDate(
+            data.settings.floatingDefaultDate,
+          ),
+        })
+      )
+        setToast("已从悬浮窗添加任务");
     });
   }, [data, currentListId, view]);
   function trashTask(id: string) {
@@ -600,6 +681,11 @@ export default function App() {
     <button
       key={id}
       className={`sidebar-item ${view === id ? "selected" : ""}`}
+      title={
+        id === "inbox"
+          ? "暂时不知道放哪的任务先放这里，之后再整理"
+          : undefined
+      }
       onClick={() => go(id)}
     >
       <Icon size={17} />
@@ -2435,6 +2521,7 @@ function SettingsDialog({
   onUnarchive: (id: string) => void;
 }) {
   const [tab, setTab] = useState("general");
+  const [capturingShortcut, setCapturingShortcut] = useState(false);
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <div className="settings-dialog" onMouseDown={(e) => e.stopPropagation()}>
@@ -2539,6 +2626,73 @@ function SettingsDialog({
               </label>
               <p className="setting-caption">
                 Windows 提醒需要应用保持运行。设备休眠或退出应用时不会触发。
+              </p>
+              <div className="setting-subheading">桌面悬浮窗</div>
+              <div className="setting-row setting-shortcut-row">
+                <span>呼出快捷键</span>
+                <div className="shortcut-controls">
+                  <button
+                    type="button"
+                    className={`shortcut-capture ${capturingShortcut ? "capturing" : ""}`}
+                    onClick={() => setCapturingShortcut(true)}
+                    onBlur={() => setCapturingShortcut(false)}
+                    onKeyDown={(event) => {
+                      const shortcut = shortcutFromKeyEvent(event);
+                      if (!shortcut) return;
+                      event.preventDefault();
+                      onChange({ floatingShortcut: shortcut });
+                      setCapturingShortcut(false);
+                    }}
+                  >
+                    {capturingShortcut
+                      ? "请按下组合键…"
+                      : data.settings.floatingShortcut
+                        ? shortcutLabel(data.settings.floatingShortcut)
+                        : "未设置"}
+                  </button>
+                  <button
+                    type="button"
+                    className="text-button"
+                    onClick={() => onChange({ floatingShortcut: "CommandOrControl+Alt+Space" })}
+                  >
+                    恢复默认
+                  </button>
+                </div>
+              </div>
+              <label className="setting-row">
+                <span>默认清单</span>
+                <select
+                  value={data.settings.floatingDefaultListId}
+                  onChange={(e) =>
+                    onChange({ floatingDefaultListId: e.target.value })
+                  }
+                >
+                  {data.lists
+                    .filter((list) => !list.archived)
+                    .map((list) => (
+                      <option value={list.id} key={list.id}>
+                        {list.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="setting-row">
+                <span>默认日期</span>
+                <select
+                  value={data.settings.floatingDefaultDate}
+                  onChange={(e) =>
+                    onChange({
+                      floatingDefaultDate: e.target.value as AppData["settings"]["floatingDefaultDate"],
+                    })
+                  }
+                >
+                  <option value="none">不设置日期</option>
+                  <option value="today">今天</option>
+                  <option value="tomorrow">明天</option>
+                </select>
+              </label>
+              <p className="setting-caption">
+                单击右下角托盘图标或按快捷键打开悬浮窗。输入中的日期和时间会覆盖默认日期。
               </p>
               <div className="setting-subheading">已归档清单</div>
               {data.lists

@@ -168,6 +168,9 @@ const appSchema = z.object({
     breakMinutes: z.number().int().min(1).max(60),
     sound: z.boolean(),
     notifications: z.boolean(),
+    floatingShortcut: z.string().trim().max(100).default("CommandOrControl+Alt+Space"),
+    floatingDefaultListId: idSchema.default("inbox"),
+    floatingDefaultDate: z.enum(["none", "today", "tomorrow"]).default("today"),
   }),
 });
 
@@ -195,6 +198,12 @@ export function validateData(value: unknown): AppData {
   const listIds = new Set(data.lists.map((item) => item.id));
   const folderIds = new Set(data.folders.map((item) => item.id));
   if (!listIds.has("inbox")) throw new Error("数据缺少收集箱");
+  if (
+    !listIds.has(data.settings.floatingDefaultListId) ||
+    data.lists.find((item) => item.id === data.settings.floatingDefaultListId)
+      ?.archived
+  )
+    data.settings.floatingDefaultListId = "inbox";
   if (data.tasks.some((task) => !listIds.has(task.listId)))
     throw new Error("任务引用了不存在的清单");
   if (data.lists.some((list) => list.folderId && !folderIds.has(list.folderId)))
@@ -239,6 +248,9 @@ export function createEmptyData(): AppData {
       breakMinutes: 5,
       sound: true,
       notifications: true,
+      floatingShortcut: "CommandOrControl+Alt+Space",
+      floatingDefaultListId: "inbox",
+      floatingDefaultDate: "today",
     },
   };
 }
