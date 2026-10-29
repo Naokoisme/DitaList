@@ -446,9 +446,11 @@ try {
       async function launch() {
         const value = await _electron.launch(options);
         await value.firstWindow();
-        const status = await value.evaluate(({ app, BrowserWindow }) => ({ profile: app.getPath('userData'), appPath: app.getAppPath(), versions: { electron: process.versions.electron, chrome: process.versions.chrome }, windows: BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), url: w.webContents.getURL() })) }));
+        const status = await value.evaluate(({ app, BrowserWindow }) => ({ appName: app.getName(), profile: app.getPath('userData'), appPath: app.getAppPath(), versions: { electron: process.versions.electron, chrome: process.versions.chrome }, windows: BrowserWindow.getAllWindows().map(w => ({ visible: w.isVisible(), title: w.getTitle(), url: w.webContents.getURL() })) }));
+        assert.equal(status.appName, 'DitaList', 'Electron 应用名必须使用产品名');
         assert.ok(status.profile.startsWith(dataDir), 'Electron必须使用隔离资料路径');
         assert.equal(status.windows.length, 1, '应只创建一个本地清单测试窗口');
+        assert.equal(status.windows[0].title, 'DitaList', '窗口标题必须使用产品名');
         assert.ok(status.windows.every(w => !w.visible), '测试窗口不能显示到用户桌面');
         launches.push(status);
         return value;
