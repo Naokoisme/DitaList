@@ -1287,6 +1287,12 @@ function createWindow(showWhenReady = true) {
     if (closing) return;
     closing = true;
     void writeQueue.then(async () => {
+      if (tray && !quitting && !lastSaveError) {
+        // Keep reminders and the floating count alive while the main window is in the tray.
+        closing = false;
+        mainWindow?.hide();
+        return;
+      }
       if (lastSaveError) {
         const result = await dialog.showMessageBox(mainWindow, {
           type: "error",
