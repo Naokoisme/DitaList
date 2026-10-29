@@ -72,6 +72,13 @@ import CalendarView from "./components/CalendarView";
 import { FocusView, HabitsView, MatrixView } from "./components/Tools";
 import "./calendar.css";
 
+const saveStatusLabels = {
+  saved: "已保存到本机",
+  saving: "正在保存到本机",
+  error: "本机保存失败",
+};
+type SaveStatus = keyof typeof saveStatusLabels;
+
 const labels: Record<string, string> = {
   today: "今天",
   next7: "最近7天",
@@ -233,10 +240,10 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [calendarKey, setCalendarKey] = useState(0);
   const [toast, setToast] = useState("");
-  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "error">(
-    "saved",
-  );
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
+  const [settingsSection, setSettingsSection] = useState<
+    "general" | "data" | null
+  >(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [quick, setQuick] = useState("");
@@ -440,7 +447,7 @@ export default function App() {
         setCreateDialog(null);
         setDateTask(null);
         setSearchOpen(false);
-        setSettingsOpen(false);
+        setSettingsSection(null);
         setListDialog(null);
         setTagDialog(null);
         setContext(null);
@@ -975,7 +982,7 @@ export default function App() {
           className="local-avatar"
           aria-label="设置"
           title="DitaList · 设置"
-          onClick={() => setSettingsOpen(true)}
+          onClick={() => setSettingsSection("general")}
         >
           <img src="./icon.svg" alt="" />
         </button>
@@ -1011,7 +1018,7 @@ export default function App() {
             className="rail-button mobile-settings"
             title="设置"
             aria-label="设置"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => setSettingsSection("general")}
           >
             <Settings2 size={20} />
           </button>
@@ -1019,14 +1026,9 @@ export default function App() {
         <div className="rail-bottom">
           <button
             className={`rail-button save-indicator ${saveStatus}`}
-            title={
-              saveStatus === "saved"
-                ? "已保存到本机"
-                : saveStatus === "saving"
-                  ? "正在保存到本机"
-                  : "本机保存失败"
-            }
-            aria-label={saveStatus === "saved" ? "已保存到本机" : "保存状态"}
+            title={`${saveStatusLabels[saveStatus]}，查看数据与备份`}
+            aria-label={`${saveStatusLabels[saveStatus]}，查看数据与备份`}
+            onClick={() => setSettingsSection("data")}
           >
             <ShieldCheck size={20} />
           </button>
@@ -1034,7 +1036,7 @@ export default function App() {
             className="rail-button"
             title="设置"
             aria-label="设置"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => setSettingsSection("general")}
           >
             <Settings2 size={20} />
           </button>
@@ -1910,11 +1912,13 @@ export default function App() {
           </div>
         </div>
       )}
-      {settingsOpen && (
+      {settingsSection && (
         <SettingsDialog
           data={data}
           info={info}
-          onClose={() => setSettingsOpen(false)}
+          initialTab={settingsSection}
+          saveStatus={saveStatus}
+          onClose={() => setSettingsSection(null)}
           onChange={(settings) =>
             update((s) => ({ ...s, settings: { ...s.settings, ...settings } }))
           }
@@ -3776,6 +3780,8 @@ const defaultAgentDocTemplate = `# DitaList 本地 Agent / MCP 配置说明
 function SettingsDialog({
   data,
   info,
+  initialTab,
+  saveStatus,
   onClose,
   onChange,
   onExport,
@@ -3786,6 +3792,8 @@ function SettingsDialog({
 }: {
   data: AppData;
   info: StorageInfo | null;
+  initialTab: "general" | "data";
+  saveStatus: SaveStatus;
   onClose: () => void;
   onChange: (settings: Partial<AppData["settings"]>) => void;
   onExport: () => void;
@@ -3794,7 +3802,7 @@ function SettingsDialog({
   onToast?: (message: string) => void;
   onUnarchive: (id: string) => void;
 }) {
-  const [tab, setTab] = useState("general");
+  const [tab, setTab] = useState<string>(initialTab);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
   const [desktopShortcutStatus, setDesktopShortcutStatus] = useState<
     "checking" | "missing" | "exists" | "error"
@@ -4215,11 +4223,17 @@ function SettingsDialog({
           )}
           {tab === "data" && (
             <>
-              <div className="data-status">
+              <div className={`data-status ${saveStatus}`} role="status">
                 <ShieldCheck size={23} />
                 <div>
-                  <strong>数据保存在当前设备</strong>
-                  <p>无需账号，不连接滴答清单服务器。</p>
+                  <strong>{saveStatusLabels[saveStatus]}</strong>
+                  <p>
+                    {saveStatus === "error"
+                      ? "最近的更改尚未保存，请先导出备份，再检查本机存储。"
+                      : saveStatus === "saving"
+                        ? "正在写入当前设备，请稍候。"
+                        : "数据只保存在当前设备，请定期导出一份独立备份。"}
+                  </p>
                 </div>
               </div>
               <div className="data-stats">

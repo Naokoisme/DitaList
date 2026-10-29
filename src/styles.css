@@ -2046,6 +2046,9 @@ textarea::placeholder {
   font-weight: 500;
   font-size: 13px;
 }
+.data-status.error {
+  color: #e13e39;
+}
 .data-status p {
   font-size: 11px;
   line-height: 19px;
