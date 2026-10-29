@@ -3,9 +3,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { parseArgs } from "node:util";
 import { rcedit } from "rcedit";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const { values } = parseArgs({ options: { output: { type: "string" } } });
 const branch = execFileSync("git", ["branch", "--show-current"], {
   cwd: root,
   encoding: "utf8",
@@ -15,12 +17,16 @@ const dirty = execFileSync("git", ["status", "--porcelain"], {
   encoding: "utf8",
 }).trim();
 if (branch !== "main" || dirty)
-  throw new Error("便携包必须从干净的本地 main 构建");
+  throw new Error("Windows 包必须从干净的本地 main 构建");
 const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], {
   cwd: root,
   encoding: "utf8",
 }).trim();
-const output = path.join(root, "release", "DitaList");
+const releaseDirectory = path.join(root, "release");
+const output = path.resolve(root, values.output || "release/DitaList");
+const relativeOutput = path.relative(releaseDirectory, output);
+if (!relativeOutput || relativeOutput.startsWith("..") || path.isAbsolute(relativeOutput))
+  throw new Error("打包目录必须位于项目 release 目录内");
 try {
   await fs.access(output);
   throw new Error(
@@ -121,7 +127,7 @@ const info = {
   product: "DitaList",
   sourceSha,
   builtAt: new Date().toISOString(),
-  executable,
+  executable: "DitaList.exe",
   executableSha256: hash,
   defaultData: "%APPDATA%\\DidaLocal\\data\\database.json",
   cloud: false,

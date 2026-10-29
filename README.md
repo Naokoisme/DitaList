@@ -6,11 +6,14 @@ Naoko 的个人离线任务管理应用，面向 Windows 和 Android。任务、
 
 ## 直接使用
 
-- Windows：双击 `启动DitaList.cmd`，或运行便携目录中的 `DitaList.exe`。便携目录需要整体保留，不要只拷贝 EXE。
+- Windows：从 [Releases](https://github.com/Naokoisme/DitaList/releases) 下载 `DitaList-…-Setup.exe`，双击安装。安装器提供开始菜单和可选桌面快捷方式；默认仅为当前用户安装，无需管理员权限。
+- Windows 便携版：解压后运行目录中的 `DitaList.exe`，需保留完整目录。源码开发也可使用 `启动DitaList.cmd`。
 - Android：安装构建生成的 APK。最低 Android 8.0，使用系统 WebView，不申请联网权限。
 - 数据导入：在“设置 → 数据与备份 → 导入数据”中选择 CSV 任务列表或 JSON 备份。导入会合并现有内容，并保留无法转换的复杂规则原文。
 
 Windows 数据保存在 `%APPDATA%\DidaLocal\data\database.json`，自动备份位于同一目录。Android 数据保存在应用私有目录。电脑与手机各自离线存储，跨设备迁移使用 JSON 导出、导入。
+
+Windows 升级时先在系统托盘中选择“退出 DitaList”，再运行新版 Setup。安装器会沿用上次的安装目录，保留已有任务和设置；便携版切换到安装版也使用同一数据目录。可在 Windows“已安装的应用”中卸载 DitaList，卸载会保留本地数据，重新安装后继续使用。
 
 请定期导出一份独立备份。卸载 Android 应用或清除其应用数据会删除私有数据，卸载前先导出。
 
@@ -51,8 +54,14 @@ node scripts/ui-smoke.mjs --electron-only
 # 从干净的本地 main 构建 Windows 便携版
 npm run package:win
 
+# 从干净的本地 main 构建单文件 Windows 安装包
+# 需要 Inno Setup 6.5+；自定义位置可设置 INNO_SETUP_COMPILER
+npm run package:setup
+# 可单独指定发布文件名标签，不修改程序版本号
+npm run package:setup -- --label 0.0.0-beta.6
+
 # 构建 Android APK
 pwsh -File scripts/build-android.ps1
 ```
 
-Windows 便携版和 Android APK 都会生成构建信息与文件校验清单，便于确认产物来源和完整性。
+产物位于 `release/`。Windows Setup 使用 [Inno Setup](https://jrsoftware.org/) 封装完整程序，生成 EXE、SHA-256 校验文件及构建信息；构建时的临时程序目录会在成功后清理。Windows 便携版和 Android APK 也会生成构建信息与文件校验清单，便于确认产物来源和完整性。
