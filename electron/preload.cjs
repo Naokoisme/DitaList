@@ -8,4 +8,13 @@ contextBridge.exposeInMainWorld("didaLocal", {
   revealData: () => ipcRenderer.invoke("data:reveal"),
   notify: (title, body) => ipcRenderer.invoke("notify", title, body),
   windowAction: (action) => ipcRenderer.send("window:action", action),
+  openFloating: () => ipcRenderer.send("floating:show"),
+  closeFloating: () => ipcRenderer.send("floating:close"),
+  openMain: () => ipcRenderer.send("floating:open-main"),
+  submitQuickAdd: (text) => ipcRenderer.send("floating:quick-add", text),
+  onQuickAdd: (listener) => {
+    const wrapped = (_event, text) => listener(text);
+    ipcRenderer.on("quick-add", wrapped);
+    return () => ipcRenderer.removeListener("quick-add", wrapped);
+  },
 });

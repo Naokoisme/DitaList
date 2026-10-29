@@ -6,6 +6,10 @@ const {
   dialog,
   shell,
   Notification,
+  Menu,
+  Tray,
+  globalShortcut,
+  screen,
 } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -34,6 +38,11 @@ const databasePath = path.join(dataDirectory, "database.json");
 const backupPath = path.join(dataDirectory, "database.backup.json");
 const distDirectory = path.resolve(__dirname, "..", "dist");
 let mainWindow;
+let floatingWindow;
+let tray;
+let floatingReady = false;
+let floatingRequested = false;
+let quitting = false;
 let loaded = false;
 let writeQueue = Promise.resolve();
 let lastSaveError = null;
@@ -149,13 +158,129 @@ async function atomicWrite(file, contents) {
   }
 }
 
-function assertSender(event) {
+function assertWindowSender(event, target) {
   const url = event.senderFrame?.url || "";
   if (
-    event.sender !== mainWindow?.webContents ||
+    event.sender !== target?.webContents ||
     !url.startsWith("dida-local://app/")
   )
     throw new Error("拒绝来自未知页面的操作");
+}
+
+function assertSender(event) {
+  assertWindowSender(event, mainWindow);
+}
+
+function assertFloatingSender(event) {
+  assertWindowSender(event, floatingWindow);
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+function placeFloatingWindow() {
+  if (!floatingWindow || floatingWindow.isDestroyed()) return;
+  const display = screen.getPrimaryDisplay();
+  const workArea = display.workArea;
+  const [width, height] = floatingWindow.getSize();
+  floatingWindow.setPosition(
+    Math.round(workArea.x + workArea.width - width - 20),
+    Math.round(workArea.y + workArea.height - height - 20),
+  );
+}
+
+function showFloatingWindow() {
+  if (!floatingWindow || floatingWindow.isDestroyed()) createFloatingWindow();
+  floatingRequested = true;
+  if (!floatingReady || !floatingWindow || floatingWindow.isDestroyed()) return;
+  placeFloatingWindow();
+  floatingWindow.show();
+  floatingWindow.focus();
+}
+
+function toggleFloatingWindow() {
+  if (floatingWindow?.isVisible()) {
+    floatingRequested = false;
+    floatingWindow.hide();
+  } else {
+    showFloatingWindow();
+  }
+}
+
+function sendQuickAddToMain(text) {
+  showMainWindow();
+  const send = () => mainWindow?.webContents.send("quick-add", text);
+  if (mainWindow?.webContents.isLoading())
+    mainWindow.webContents.once("did-finish-load", send);
+  else send();
+}
+
+function createFloatingWindow() {
+  floatingReady = false;
+  floatingWindow = new BrowserWindow({
+    width: 390,
+    height: 190,
+    minWidth: 340,
+    minHeight: 170,
+    resizable: false,
+    frame: false,
+    show: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: "#fff7f0",
+    title: "DitaList 快速添加",
+    icon: path.join(distDirectory, "icon.png"),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+      webSecurity: true,
+    },
+  });
+  floatingWindow.once("ready-to-show", () => {
+    floatingReady = true;
+    if (floatingRequested) showFloatingWindow();
+  });
+  floatingWindow.on("closed", () => {
+    floatingWindow = null;
+    floatingReady = false;
+    floatingRequested = false;
+  });
+  floatingWindow.loadURL("dida-local://app/floating.html");
+}
+
+function quitApplication() {
+  quitting = true;
+  tray?.destroy();
+  tray = null;
+  floatingWindow?.close();
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  else writeQueue.finally(() => app.quit());
+}
+
+function createTray() {
+  if (process.env.DIDA_LOCAL_HEADLESS === "1" || tray) return;
+  tray = new Tray(path.join(distDirectory, "icon.png"));
+  tray.setToolTip("DitaList");
+  tray.setContextMenu(
+    Menu.buildFromTemplate([
+      { label: "打开 DitaList", click: showMainWindow },
+      { label: "快速添加任务", click: showFloatingWindow },
+      { type: "separator" },
+      { label: "退出 DitaList", click: quitApplication },
+    ]),
+  );
+  tray.on("click", toggleFloatingWindow);
+  tray.on("double-click", showMainWindow);
+  globalShortcut.register("CommandOrControl+Alt+Space", showFloatingWindow);
 }
 
 function registerIpc() {
@@ -251,6 +376,44 @@ function registerIpc() {
     }
     if (action === "close") mainWindow?.close();
   });
+  ipcMain.on("floating:show", (event) => {
+    try {
+      assertSender(event);
+    } catch {
+      return;
+    }
+    showFloatingWindow();
+  });
+  ipcMain.on("floating:close", (event) => {
+    try {
+      assertFloatingSender(event);
+    } catch {
+      return;
+    }
+    floatingRequested = false;
+    floatingWindow?.hide();
+  });
+  ipcMain.on("floating:open-main", (event) => {
+    try {
+      assertFloatingSender(event);
+    } catch {
+      return;
+    }
+    floatingRequested = false;
+    floatingWindow?.hide();
+    showMainWindow();
+  });
+  ipcMain.on("floating:quick-add", (event, text) => {
+    try {
+      assertFloatingSender(event);
+    } catch {
+      return;
+    }
+    if (typeof text !== "string" || !text.trim() || text.length > 2000) return;
+    floatingRequested = false;
+    floatingWindow?.hide();
+    sendQuickAddToMain(text.trim());
+  });
 }
 
 function createWindow() {
@@ -323,8 +486,7 @@ function createWindow() {
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", () => {
-    if (mainWindow?.isMinimized()) mainWindow.restore();
-    mainWindow?.focus();
+    showMainWindow();
   });
   app
     .whenReady()
@@ -368,6 +530,7 @@ else {
       });
       registerIpc();
       createWindow();
+      createTray();
       app.on("activate", () => {
         if (BrowserWindow.getAllWindows().length === 0) createWindow();
       });
@@ -376,7 +539,13 @@ else {
       console.error(error);
       app.quit();
     });
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+    tray?.destroy();
+    tray = null;
+  });
   app.on("window-all-closed", () => {
+    if (process.platform === "win32" && tray && !quitting) return;
     writeQueue.finally(() => app.quit());
   });
 }

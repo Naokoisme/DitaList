@@ -1,0 +1,155 @@
+:root {
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", sans-serif;
+  color: #202b55;
+  background: transparent;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: transparent;
+}
+
+button,
+input {
+  font: inherit;
+  -webkit-app-region: no-drag;
+}
+
+button {
+  border: 0;
+  cursor: pointer;
+}
+
+.floating-shell {
+  width: 100%;
+  height: 100%;
+  padding: 16px 17px 13px;
+  background: #fff8f3;
+  border: 1px solid #f0d8ce;
+  border-radius: 15px;
+  box-shadow: 0 15px 42px #202b5538;
+  -webkit-app-region: drag;
+}
+
+.floating-header,
+.floating-brand,
+.floating-footer,
+.floating-form {
+  display: flex;
+  align-items: center;
+}
+
+.floating-header {
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.floating-brand {
+  gap: 8px;
+}
+
+.floating-brand img {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+
+.floating-brand strong {
+  font-size: 14px;
+  letter-spacing: 0.1px;
+}
+
+.floating-brand span,
+.floating-footer {
+  color: #8a7e83;
+  font-size: 12px;
+}
+
+.floating-close {
+  width: 27px;
+  height: 27px;
+  display: grid;
+  place-items: center;
+  color: #8a7e83;
+  background: transparent;
+  border-radius: 7px;
+}
+
+.floating-close:hover {
+  color: #202b55;
+  background: #f4ddd5;
+}
+
+.floating-form {
+  gap: 9px;
+  padding: 7px 7px 7px 13px;
+  background: #fff;
+  border: 1px solid #edd6ce;
+  border-radius: 11px;
+  box-shadow: 0 3px 12px #202b550c;
+}
+
+.floating-form input {
+  min-width: 0;
+  flex: 1;
+  color: #202b55;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 14px;
+}
+
+.floating-form input::placeholder {
+  color: #b6a7a5;
+}
+
+.floating-add {
+  width: 31px;
+  height: 31px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 31px;
+  color: #fff;
+  background: #e86c59;
+  border-radius: 8px;
+  transition: transform 0.12s, background 0.12s;
+}
+
+.floating-add:hover {
+  background: #d95c4b;
+  transform: translateY(-1px);
+}
+
+.floating-footer {
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 13px;
+}
+
+.floating-open-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  color: #4772fa;
+  background: transparent;
+  font-size: 12px;
+}
+
+.floating-open-main:hover {
+  color: #315bd8;
+}

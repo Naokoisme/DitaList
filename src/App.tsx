@@ -510,6 +510,12 @@ export default function App() {
     setQuick("");
     return t.id;
   }
+  useEffect(() => {
+    if (!data || !window.didaLocal?.onQuickAdd) return;
+    return window.didaLocal.onQuickAdd((text) => {
+      if (addTaskFromInput(text)) setToast("已从悬浮窗添加任务");
+    });
+  }, [data, currentListId, view]);
   function trashTask(id: string) {
     patchTask(id, { deletedAt: stamp() });
     if (selectedId === id) setSelectedId(null);

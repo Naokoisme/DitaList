@@ -120,6 +120,11 @@ export interface DesktopBridge {
   revealData(): Promise<void>;
   notify(title: string, body: string): Promise<void>;
   windowAction(action: "minimize" | "maximize" | "close"): void;
+  openFloating(): void;
+  closeFloating(): void;
+  openMain(): void;
+  submitQuickAdd(text: string): void;
+  onQuickAdd(listener: (text: string) => void): () => void;
 }
 declare global {
   interface Window {

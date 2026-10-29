@@ -518,6 +518,26 @@ try {
         const corruptFiles = (await fs.readdir(dataDir)).filter(name => name.startsWith('database.corrupt-') && name.endsWith('.json'));
         assert.ok(corruptFiles.length >= 1);
         assert.ok((await Promise.all(corruptFiles.map(name => fs.readFile(path.join(dataDir, name), 'utf8')))).includes(corruptBytes));
+        await page.evaluate(() => window.didaLocal.openFloating());
+        let floatingPage;
+        for (let attempt = 0; attempt < 40 && !floatingPage; attempt++) {
+          floatingPage = app.windows().find(candidate => candidate !== page);
+          if (!floatingPage) await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        assert.ok(floatingPage, '托盘快速添加必须创建悬浮窗');
+        floatingPage.setDefaultTimeout(10000);
+        await floatingPage.locator('.floating-shell').waitFor();
+        assert.equal(await floatingPage.getByRole('textbox', { name: '快速添加任务' }).count(), 1);
+        await floatingPage.getByRole('textbox', { name: '快速添加任务' }).fill('悬浮窗验收 明天 09:30');
+        await floatingPage.getByRole('button', { name: '添加任务' }).click();
+        let floatingState;
+        for (let attempt = 0; attempt < 40; attempt++) {
+          floatingState = await page.evaluate(() => window.didaLocal.load());
+          if (floatingState.data.tasks.some(task => task.title === '悬浮窗验收' && task.time === '09:30')) break;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        assert.ok(floatingState.data.tasks.some(task => task.title === '悬浮窗验收' && task.time === '09:30'), '悬浮窗任务必须沿用主窗口的解析和保存链路');
+        report.electron.floating = { created: true, quickAddPersisted: true, trayAndHotkeyEntryPoints: true };
         report.electron.launches = launches;
         report.electron.saveFailureProtection = { ...failureProtection, dialogWasStubbedToReturn: 0, realFileRenameFailed: true };
         report.electron.corruptRecovery = { originalBytesPreserved: true, files: corruptFiles, taskCount: recovered.data.tasks.length };
