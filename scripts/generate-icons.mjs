@@ -15,6 +15,7 @@ try {
   const page = await browser.newPage({
     viewport: { width: 256, height: 256 },
     deviceScaleFactor: 1,
+    colorScheme: "light",
   });
   const sizes = [16, 24, 32, 48, 64, 128, 256];
   const images = [];

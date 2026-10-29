@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="DitaList 像素 N 图标" shape-rendering="crispEdges">
-  <!-- 整数网格、实色描边和阶梯阴影让小尺寸图标保持像素轮廓。 -->
-  <path fill="#8B95A7" d="M8 7H24V10H28V29H8Z"/>
-  <path fill="#151922" d="M5 3H21V5H23V7H25V27H5Z"/>
-  <path fill="#F2F4FA" d="M7 5H19V9H23V25H7Z"/>
-  <path fill="#C6CEDD" d="M21 5V7H23V8H20V5Z"/>
-  <path fill="#151922" d="M9 10H12V12H14V15H16V18H18V10H21V23H18V21H16V18H14V15H12V23H9Z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="DitaList 开口方框 N 图标">
+  <style>
+    path { stroke: #182030; }
+    @media (prefers-color-scheme: dark) { path { stroke: #EDF2FA; } }
+  </style>
+  <path d="M15 5H8A3 3 0 0 0 5 8V24A3 3 0 0 0 8 27H24A3 3 0 0 0 27 24V17" fill="none" stroke="#182030" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M11 21V10L22 21V10" fill="none" stroke="#182030" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
