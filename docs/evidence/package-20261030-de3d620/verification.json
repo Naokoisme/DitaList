@@ -1,0 +1,25 @@
+{
+  "verifiedAt": "2026-10-30T14:51:56.9722913+08:00",
+  "sourceCommit": "de3d6200282626f2388a1461f541863e533855cb",
+  "branch": "main",
+  "clean": true,
+  "version": "0.0.0",
+  "normalApplicationIdentity": true,
+  "isolatedIdentitiesAbsent": true,
+  "payloadFilesVerified": 4,
+  "zipEntriesVerified": 5,
+  "setupVersion": "0.0.0                                             ",
+  "installedThisCandidate": false,
+  "artifacts": [
+    {
+      "name": "DitaList-Rust-Preview-Portable.zip",
+      "bytes": 4264487,
+      "sha256": "3e2e5231a63903e05b0ff1036f09dca73cb9a49c357bcffab7d2929d6d803021"
+    },
+    {
+      "name": "DitaList-Rust-Preview-Setup.exe",
+      "bytes": 4950532,
+      "sha256": "6610dd4c1c26e376348557c81c8e9d967c743842476a9d2c72f21f64ee16d1f5"
+    }
+  ]
+}

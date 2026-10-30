@@ -13,7 +13,7 @@ DitaList 继续作为本地优先的 Windows 任务与日历软件。目标是�
 
 采用一个常驻的 Rust/Tauri 桌面核心，统一管理业务数据、后台任务和桌面入口。原生悬浮栏提供轻量入口，Web 快速输入和 React 主界面按需打开。
 
-实施仅发生在独立项目中。沿用版本 0.0.0，以源码提交和哈希标识候选；不替换日用安装，不推送远程或发布 Release。Android 不进入新工程。
+实施发生在独立 Rust 项目中。沿用版本 0.0.0，以源码提交和哈希标识候选；不自动替换日用安装。用户后续已授权将 Rust 主线、项目文档和当前最新版 Release 发布到原 GitHub 仓库，历史试用安装包不补发。Android 不进入新工程。
 
 ## 2. 已确认的决定
 
@@ -428,15 +428,15 @@ Windows 官方给出了约 40×40 的点击／触控目标参考和顶层浮层 
 
 业务架构研究以指定 DitaList 基线和 Aether 控制层参考代码为依据。视觉修订额外只读查看了现有样式和已保存的界面截图；样式核对时 DitaList HEAD 为 `be30dac7cc4317e5dd67eca03312d8fa2ffaa07c`。这不改变第 7 节的业务代码研究基线，也不把其他对话的改动归入本任务。
 
-此前为解释旧备份，在 `be30dac7cc4317e5dd67eca03312d8fa2ffaa07c` 只读核对了 [备份导入合并](D:/dida-local/src/core/domain.ts:667) 和 [自动备份恢复](D:/dida-local/electron/main.cjs:126)，确认按 ID 补入缺失任务、保留已有任务，以及故障时读取备份的分支；没有实际导入或恢复数据。
+此前为解释旧备份，在 `be30dac7cc4317e5dd67eca03312d8fa2ffaa07c` 只读核对了 [备份导入合并](https://github.com/Naokoisme/DitaList/blob/be30dac7cc4317e5dd67eca03312d8fa2ffaa07c/src/core/domain.ts#L667) 和 [自动备份恢复](https://github.com/Naokoisme/DitaList/blob/be30dac7cc4317e5dd67eca03312d8fa2ffaa07c/electron/main.cjs#L126)，确认按 ID 补入缺失任务、保留已有任务，以及故障时读取备份的分支；没有实际导入或恢复数据。
 
 历史审查以 `be30dac7cc4317e5dd67eca03312d8fa2ffaa07c` 核对了旧版自动审核弹窗、Electron MCP 请求队列、创建工具参数和整条 Web 输入。这些证据用于确认迁移对象；本次独立工程的实际来源提交见 `source-provenance.md`，实现与验收进度以 `function-matrix.md` 和 `validation.md` 为准。
 
-本对话没有为该架构运行产品、连接 MCP 服务、构建安装、执行设备操作或打开用户任务数据库。文件改动限定在仓库外 Markdown 与此前选定的配套视觉稿；生成的图片不是生产组件截图。
+早期架构讨论只进行只读研究和仓库外文档／视觉稿编写，未运行产品或读取用户数据库；该阶段原文见[讨论归档](history/DitaList-Tauri-架构草案.md)。后续 Rust 实施和隔离验证见[验证报告](validation.md)与[动效记录](motion-flow-20261030.md)。第 8 节视觉稿仍是设计参考，不能当作生产组件截图。
 
-- DitaList：`c925440b9ff00c5d1cf41e265d811c84a532e15e`。[业务规则](D:/dida-local/src/core/domain.ts)、[前端与保存](D:/dida-local/src/App.tsx)、[专注](D:/dida-local/src/components/Tools.tsx)、[宿主与 MCP](D:/dida-local/electron/main.cjs)、[现有悬浮输入](D:/dida-local/src/FloatingApp.tsx)、[安装定义](D:/dida-local/scripts/installer/DitaList.iss)。本地文件链接可能随主线演进，本文事实基线以上述提交为准。
-- 视觉参考：[现有悬浮样式](D:/dida-local/src/floating.css)、[主界面样式](D:/dida-local/src/styles.css)、[已有浅色悬浮组件预览](D:/dida-local/reports/appearance-floating-toggle/20261029-220712/floating-design-preview.png)、[已有深色输入预览](D:/dida-local/reports/appearance-floating-toggle/20261029-220712/floating-dark-preview.png)、[已保存的日历界面参考](D:/dida-local/reports/calendar-interactions/20261030-103854/user-calendar-drag.png)。第 8 节配图沿用这些样式，布局为本对话提出的悬浮栏设计。
-- Aether：控制层核对基线 `aff1b58aa69e1347bc4f4a5ad5eaf41b93d76d81`。[地址发布与身份校验](D:/Work/aether/src/main/control/server.ts)、[请求记录与去重](D:/Work/aether/src/main/control/controller.ts)、[连接程序](D:/Work/aether/scripts/aether-control-mcp.mjs)。借鉴机制不等于复制 Aether 的全部业务框架。
+- DitaList：`c925440b9ff00c5d1cf41e265d811c84a532e15e`。[业务规则](https://github.com/Naokoisme/DitaList/blob/c925440b9ff00c5d1cf41e265d811c84a532e15e/src/core/domain.ts)、[前端与保存](https://github.com/Naokoisme/DitaList/blob/c925440b9ff00c5d1cf41e265d811c84a532e15e/src/App.tsx)、[专注](https://github.com/Naokoisme/DitaList/blob/c925440b9ff00c5d1cf41e265d811c84a532e15e/src/components/Tools.tsx)、[宿主与 MCP](https://github.com/Naokoisme/DitaList/blob/c925440b9ff00c5d1cf41e265d811c84a532e15e/electron/main.cjs)、[现有悬浮输入](https://github.com/Naokoisme/DitaList/blob/c925440b9ff00c5d1cf41e265d811c84a532e15e/src/FloatingApp.tsx)、[安装定义](https://github.com/Naokoisme/DitaList/blob/c925440b9ff00c5d1cf41e265d811c84a532e15e/scripts/installer/DitaList.iss)。源码链接固定到当时提交；历史截图与其他工程的本机参考仅保留路径说明。
+- 视觉参考：[现有悬浮样式](https://github.com/Naokoisme/DitaList/blob/be30dac7cc4317e5dd67eca03312d8fa2ffaa07c/src/floating.css)、[主界面样式](https://github.com/Naokoisme/DitaList/blob/be30dac7cc4317e5dd67eca03312d8fa2ffaa07c/src/styles.css)、已有浅色悬浮组件预览（历史本机参考：`legacy/reports/appearance-floating-toggle/20261029-220712/floating-design-preview.png`）、已有深色输入预览（历史本机参考：`legacy/reports/appearance-floating-toggle/20261029-220712/floating-dark-preview.png`）、已保存的日历界面参考（历史本机参考：`legacy/reports/calendar-interactions/20261030-103854/user-calendar-drag.png`）。第 8 节配图沿用这些样式，布局为本对话提出的悬浮栏设计。
+- Aether：控制层核对基线 `aff1b58aa69e1347bc4f4a5ad5eaf41b93d76d81`。地址发布与身份校验（历史本机参考：`aether/src/main/control/server.ts`）、请求记录与去重（历史本机参考：`aether/src/main/control/controller.ts`）、连接程序（历史本机参考：`aether/scripts/aether-control-mcp.mjs`）。借鉴机制不等于复制 Aether 的全部业务框架。
 - [Tauri 窗口延迟创建配置](https://v2.tauri.app/reference/config/#windowconfig)、[裸窗口构建 API](https://docs.rs/tauri/latest/tauri/window/struct.WindowBuilder.html)、[权限边界](https://v2.tauri.app/security/capabilities/)。
 - [微软 WebView2 关闭与资源说明](https://learn.microsoft.com/en-us/microsoft-edge/webview2/reference/win32/icorewebview2controller#close)、[进程模型](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/process-model)。
 - 本轮窗口与绘制路线依据：[WebView2 性能最佳实践](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/performance)、[微软 Rust for Windows 的 Direct2D 示例](https://github.com/microsoft/windows-rs/blob/master/crates/samples/windows/direct2d/src/main.rs)、[Windows 高 DPI 与 Per-Monitor V2](https://learn.microsoft.com/en-us/windows/win32/hidpi/high-dpi-desktop-application-development-on-windows)。官方文档支持原生初始界面、按需创建和闲置资源管理；30 秒保留期为本产品初始策略，不是文档规定。

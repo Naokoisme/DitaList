@@ -1,3 +1,5 @@
 * text=auto eol=lf
 *.png binary
 *.ico binary
+# Evidence manifests hash the published file bytes, including original line endings.
+/docs/evidence/**/*.json -text whitespace=cr-at-eol

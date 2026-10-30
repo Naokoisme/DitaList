@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-30T04:56:01.6493997Z",
+  "label": "rust-after-main-release-focus-running",
+  "rootPid": 41168,
+  "durationSeconds": 5.4602328,
+  "cpuPercentOneCore": 0.0,
+  "privateBytes": 45039616.0,
+  "workingSetBytes": 74256384.0,
+  "processes": [
+    {
+      "pid": 41168,
+      "parent": 46716,
+      "name": "DitaListRust.exe",
+      "privateBytes": 45039616,
+      "workingSetBytes": 74256384,
+      "cpuSeconds": 35.34375
+    }
+  ]
+}

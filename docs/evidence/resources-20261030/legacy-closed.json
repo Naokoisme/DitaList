@@ -1,0 +1,43 @@
+{
+  "at": "2026-10-30T04:49:35.4362829Z",
+  "label": "legacy-1d51-after-close",
+  "rootPid": 43240,
+  "durationSeconds": 5.5040622,
+  "cpuPercentOneCore": 0.0,
+  "privateBytes": 231182336.0,
+  "workingSetBytes": 416350208.0,
+  "processes": [
+    {
+      "pid": 43240,
+      "parent": 14408,
+      "name": "electron.exe",
+      "privateBytes": 87244800,
+      "workingSetBytes": 133193728,
+      "cpuSeconds": 10.984375
+    },
+    {
+      "pid": 29460,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 93941760,
+      "workingSetBytes": 128376832,
+      "cpuSeconds": 0.921875
+    },
+    {
+      "pid": 24968,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 14061568,
+      "workingSetBytes": 59666432,
+      "cpuSeconds": 2.453125
+    },
+    {
+      "pid": 47044,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 35934208,
+      "workingSetBytes": 95113216,
+      "cpuSeconds": 0.484375
+    }
+  ]
+}

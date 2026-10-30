@@ -1,0 +1,26 @@
+[
+  {
+    "processes": [
+      {
+        "ProcessId": 49508,
+        "ParentProcessId": 44176,
+        "Name": "DitaListRust.exe",
+        "ExecutablePath": ".local/floating-feedback/fixed/DitaListRust.exe"
+      }
+    ],
+    "webView2Count": 0,
+    "at": "2026-10-30T14:28:31.4886644+08:00"
+  },
+  {
+    "processes": [
+      {
+        "ProcessId": 49508,
+        "ParentProcessId": 44176,
+        "Name": "DitaListRust.exe",
+        "ExecutablePath": ".local/floating-feedback/fixed/DitaListRust.exe"
+      }
+    ],
+    "webView2Count": 0,
+    "at": "2026-10-30T14:28:32.9185981+08:00"
+  }
+]

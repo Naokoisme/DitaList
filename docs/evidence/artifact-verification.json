@@ -1,0 +1,40 @@
+{
+  "sourceCommit": "225c8fa2e0ec42129c71a76983dc9ff0847fba13",
+  "artifactChecks": [
+    {
+      "path": "DitaList-Rust-Preview-Portable.zip",
+      "matches": true
+    },
+    {
+      "path": "DitaList-Rust-Preview-Setup.exe",
+      "matches": true
+    }
+  ],
+  "zipPayloadChecks": [
+    {
+      "path": "DitaListRust.exe",
+      "matches": true
+    },
+    {
+      "path": "ditalist-mcp.exe",
+      "matches": true
+    },
+    {
+      "path": "icon.ico",
+      "matches": true
+    },
+    {
+      "path": "使用说明.txt",
+      "matches": true
+    }
+  ],
+  "zipEntries": [
+    "DitaList-Rust-Preview/build-info.json",
+    "DitaList-Rust-Preview/ditalist-mcp.exe",
+    "DitaList-Rust-Preview/DitaListRust.exe",
+    "DitaList-Rust-Preview/icon.ico",
+    "DitaList-Rust-Preview/使用说明.txt"
+  ],
+  "testRegistrationRemoved": true,
+  "testInstallRemoved": true
+}

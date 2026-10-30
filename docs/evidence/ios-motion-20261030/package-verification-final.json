@@ -1,0 +1,21 @@
+{
+  "sourceCommit": "120211c4e45981eb082f07ed9f6a15011290a579",
+  "remoteMain": "120211c4e45981eb082f07ed9f6a15011290a579",
+  "workingTreeClean": true,
+  "normalIdentityVerified": true,
+  "debugProbeAbsent": true,
+  "payloadHashesVerified": true,
+  "zipEntryCount": 5,
+  "artifacts": [
+    {
+      "path": "DitaList-Rust-Preview-Portable.zip",
+      "bytes": 4291551,
+      "sha256": "b108a4f1b4ddde1c7411bb9feccfa0976ad572e68fb6e0beefc3952214b4e7bc"
+    },
+    {
+      "path": "DitaList-Rust-Preview-Setup.exe",
+      "bytes": 4969808,
+      "sha256": "ae4b5907f80d26d0af00e19b79f603522dcf3aea8325b68dbe0d8763a5441abe"
+    }
+  ]
+}

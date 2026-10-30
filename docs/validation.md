@@ -1,5 +1,7 @@
 # 迁移候选验证记录
 
+> 本文保留首轮迁移候选的验证结果，不代表当前安装包重新执行了全部项目。后续交互／动效检查见[文档索引](README.md)，原始结构化结果的公开副本见[证据归档](evidence/README.md)，当前发布范围见[Release 说明](release-20261030.md)。
+
 日期：2026-10-30（Asia/Shanghai）。本报告对应独立 Rust Preview 工程，原项目、日用安装和日用数据未由本任务改动。功能来源见 [source-provenance.md](source-provenance.md)，逐项迁移位置见 [function-matrix.md](function-matrix.md)。
 
 ## 环境与检查

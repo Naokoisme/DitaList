@@ -1,0 +1,12 @@
+{
+  "installed": [
+    {
+      "ProcessId": 29020,
+      "ExecutablePath": "<preview-install>/DitaListRust.exe"
+    }
+  ],
+  "directFloatingBarGestureVerified": false,
+  "visualResult": "close button has no red background after warm reopen; focus is WebView pane",
+  "observedAt": "2026-10-30T15:57:44.5000261+08:00",
+  "testProcessExited": true
+}

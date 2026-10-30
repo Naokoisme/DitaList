@@ -1,0 +1,22 @@
+[
+  {
+    "path": "DitaListRust.exe",
+    "matches": true,
+    "sha256": "9DFFF9E1892C1C430E09CB77A02285C947D58B9081BF825B6DE236F6A888CEB1"
+  },
+  {
+    "path": "ditalist-mcp.exe",
+    "matches": true,
+    "sha256": "481634919247A7B5A180009CEEDFAE80147AD8B3CC26A0A25CAB0973B8A79353"
+  },
+  {
+    "path": "icon.ico",
+    "matches": true,
+    "sha256": "B290322E357BDAD77814A4B42BABAC78ACADEAEB36CE096CBD7473EC93100664"
+  },
+  {
+    "path": "使用说明.txt",
+    "matches": true,
+    "sha256": "9B24971EA6FD422EB711A1FD26097F31C1DB71D98782970EE1174C76E4D199D2"
+  }
+]

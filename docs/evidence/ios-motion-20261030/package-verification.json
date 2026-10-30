@@ -1,0 +1,26 @@
+{
+  "sourceCommit": "eae4224d8d1866242da1ca2d23b6ff054a861d07",
+  "version": "0.0.0",
+  "normalIdentityVerified": true,
+  "debugProbeAbsent": true,
+  "payloadHashesVerified": true,
+  "zipEntries": [
+    "DitaList-Rust-Preview/build-info.json",
+    "DitaList-Rust-Preview/ditalist-mcp.exe",
+    "DitaList-Rust-Preview/DitaListRust.exe",
+    "DitaList-Rust-Preview/icon.ico",
+    "DitaList-Rust-Preview/使用说明.txt"
+  ],
+  "artifacts": [
+    {
+      "path": "DitaList-Rust-Preview-Portable.zip",
+      "bytes": 4291503,
+      "sha256": "ce7627ba5ffdd57fcf80280eeec80e07d9dddc38e3dc82be5021aa71bc3072b2"
+    },
+    {
+      "path": "DitaList-Rust-Preview-Setup.exe",
+      "bytes": 4969714,
+      "sha256": "c2e3797989ae6a7d89b01de2c5e100e9948310921729ab9d5d68a793216f7279"
+    }
+  ]
+}

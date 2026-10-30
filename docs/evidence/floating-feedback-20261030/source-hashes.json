@@ -1,0 +1,26 @@
+[
+  {
+    "Path": "src/FloatingApp.tsx",
+    "Hash": "1EC030103C3C81DE09BEB4F302B4F8C29BC40DA884A0974B05922C398542571F"
+  },
+  {
+    "Path": "src/floating.css",
+    "Hash": "63BAAA04989A96BC997A687627785CBCAD7B1E3FFFCA500ABFD148DD3E826F06"
+  },
+  {
+    "Path": "src-tauri/src/desktop/mod.rs",
+    "Hash": "C7919AF642EB44628199135D39313AB590FA1C318BA59990D25F68CDB4BA9DE1"
+  },
+  {
+    "Path": "src-tauri/src/desktop/native.rs",
+    "Hash": "8A7804B3B89C9161C0FA8AB7479BF539C061835E595F990B529AD41F57A0E6EC"
+  },
+  {
+    "Path": "src-tauri/src/desktop/position.rs",
+    "Hash": "6D66AB182D611D849AAFD47421F6F862414F89F537FA64BF9B57DC7819BE13F7"
+  },
+  {
+    "Path": "tests/floating-grip.test.ts",
+    "Hash": "A499EEDE7845B513D90702D227D41611787EB4FB8ACB7392C0304587B4FC9147"
+  }
+]

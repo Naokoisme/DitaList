@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-30T05:28:04.5745949Z",
+  "exitCode": 0,
+  "beforeSha256": "0222090203CB425544338A96B2283005D3116B2AE7A3275420EF72B567D2854A",
+  "afterSha256": "0222090203CB425544338A96B2283005D3116B2AE7A3275420EF72B567D2854A",
+  "databaseUnchanged": true,
+  "scope": "same-version preview setup overwrite after process exit"
+}

@@ -1,0 +1,19 @@
+{
+  "at": "2026-10-30T05:20:25.5579195Z",
+  "label": "rust-after-main-and-quick-release",
+  "rootPid": 46736,
+  "durationSeconds": 5.4882382,
+  "cpuPercentOneCore": 0.0,
+  "privateBytes": 46419968.0,
+  "workingSetBytes": 75976704.0,
+  "processes": [
+    {
+      "pid": 46736,
+      "parent": 39776,
+      "name": "DitaListRust.exe",
+      "privateBytes": 46419968,
+      "workingSetBytes": 75976704,
+      "cpuSeconds": 40.625
+    }
+  ]
+}

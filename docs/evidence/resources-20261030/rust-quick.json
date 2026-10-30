@@ -1,0 +1,67 @@
+{
+  "at": "2026-10-30T05:19:55.5691724Z",
+  "label": "rust-quick-only-four-tasks-dark",
+  "rootPid": 46736,
+  "durationSeconds": 5.5431481,
+  "cpuPercentOneCore": 0.0,
+  "privateBytes": 239759360.0,
+  "workingSetBytes": 487182336.0,
+  "processes": [
+    {
+      "pid": 46736,
+      "parent": 39776,
+      "name": "DitaListRust.exe",
+      "privateBytes": 51601408,
+      "workingSetBytes": 82542592,
+      "cpuSeconds": 39.84375
+    },
+    {
+      "pid": 23848,
+      "parent": 46736,
+      "name": "msedgewebview2.exe",
+      "privateBytes": 56774656,
+      "workingSetBytes": 152723456,
+      "cpuSeconds": 21.515625
+    },
+    {
+      "pid": 49384,
+      "parent": 23848,
+      "name": "msedgewebview2.exe",
+      "privateBytes": 4898816,
+      "workingSetBytes": 19230720,
+      "cpuSeconds": 1.84375
+    },
+    {
+      "pid": 37820,
+      "parent": 23848,
+      "name": "msedgewebview2.exe",
+      "privateBytes": 71450624,
+      "workingSetBytes": 101056512,
+      "cpuSeconds": 3.359375
+    },
+    {
+      "pid": 4284,
+      "parent": 23848,
+      "name": "msedgewebview2.exe",
+      "privateBytes": 15409152,
+      "workingSetBytes": 42823680,
+      "cpuSeconds": 2.140625
+    },
+    {
+      "pid": 42484,
+      "parent": 23848,
+      "name": "msedgewebview2.exe",
+      "privateBytes": 9834496,
+      "workingSetBytes": 20664320,
+      "cpuSeconds": 0.046875
+    },
+    {
+      "pid": 46872,
+      "parent": 23848,
+      "name": "msedgewebview2.exe",
+      "privateBytes": 29790208,
+      "workingSetBytes": 68141056,
+      "cpuSeconds": 0.25
+    }
+  ]
+}

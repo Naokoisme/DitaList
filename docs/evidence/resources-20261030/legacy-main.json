@@ -1,0 +1,43 @@
+{
+  "at": "2026-10-30T04:47:33.4079463Z",
+  "label": "legacy-1d51-main-open-two-tasks",
+  "rootPid": 43240,
+  "durationSeconds": 5.5303777,
+  "cpuPercentOneCore": 0.0,
+  "privateBytes": 277319680.0,
+  "workingSetBytes": 453742592.0,
+  "processes": [
+    {
+      "pid": 43240,
+      "parent": 14408,
+      "name": "electron.exe",
+      "privateBytes": 99840000,
+      "workingSetBytes": 143306752,
+      "cpuSeconds": 5.875
+    },
+    {
+      "pid": 29460,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 125120512,
+      "workingSetBytes": 155066368,
+      "cpuSeconds": 0.671875
+    },
+    {
+      "pid": 24968,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 14348288,
+      "workingSetBytes": 59650048,
+      "cpuSeconds": 2.4375
+    },
+    {
+      "pid": 47044,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 38010880,
+      "workingSetBytes": 95719424,
+      "cpuSeconds": 0.40625
+    }
+  ]
+}

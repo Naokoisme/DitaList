@@ -1,0 +1,17 @@
+{
+  "at": "2026-10-30T04:49:50.8424990Z",
+  "label": "rust-native-only-mcp-open-two-tasks",
+  "rootPid": 41168,
+  "durationSeconds": 5.5048296,
+  "cpuPercentOneCore": 0.0,
+  "privateBytes": 41234432.0,
+  "workingSetBytes": 57155584.0,
+  "processes": {
+    "pid": 41168,
+    "parent": 46716,
+    "name": "DitaListRust.exe",
+    "privateBytes": 41234432,
+    "workingSetBytes": 57155584,
+    "cpuSeconds": 2.0
+  }
+}

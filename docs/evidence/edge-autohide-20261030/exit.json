@@ -1,0 +1,15 @@
+{
+  "testProcessExited": true,
+  "installed": [
+    {
+      "ProcessId": 11072,
+      "ExecutablePath": "<preview-install>/DitaListRust.exe"
+    }
+  ],
+  "runtime": [
+    "{\"at\":\"2026-10-30T07:20:06.413358100+00:00\",\"details\":{\"baseline\":\"1d51ac981db7ea1db0266a58ea72908dba698b7e\",\"profile\":\"preview\"},\"event\":\"started\"}",
+    "{\"at\":\"2026-10-30T07:20:06.467845100+00:00\",\"details\":{\"bounds\":[1716,956,1896,996],\"state\":\"floating\"},\"event\":\"native_bar\"}",
+    "{\"at\":\"2026-10-30T07:20:06.469017300+00:00\",\"details\":{\"code\":\"desktop\",\"message\":\"快捷键已被占用或注册失败：HotKey already registered: HotKey { mods: Modifiers(ALT | CONTROL), key: Space, id: 589886 }\"},\"event\":\"error\"}",
+    "{\"at\":\"2026-10-30T07:20:53.634960500+00:00\",\"details\":null,\"event\":\"exit\"}"
+  ]
+}

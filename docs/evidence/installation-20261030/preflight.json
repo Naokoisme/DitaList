@@ -1,0 +1,8 @@
+{
+  "at": "2026-10-30T05:23:58.8154771Z",
+  "profile": "reports/installation-20261030/profile",
+  "source": "synthetic desktop acceptance profile only",
+  "initialDatabaseSha256": "4516B67CE0092FC6C31E5E9B54D664D83DC8EC9439E6C9917A2EA69FC10E6C74",
+  "installedPath": ".local/installed-preview",
+  "previousPreviewInstall": false
+}

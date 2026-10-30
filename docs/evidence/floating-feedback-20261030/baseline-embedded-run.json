@@ -1,0 +1,10 @@
+{
+  "binary": ".local/floating-feedback/baseline/DitaListRust.exe",
+  "identifier": "Naoko.DitaList.RustPreview.FloatingFeedback",
+  "phase": "baseline-embedded",
+  "dataDir": ".local/floating-feedback/baseline-data",
+  "sha256": "96B870DA1BE03AF78891F4A6E4D83C30A1E380D62DFB90725325E0948C553CDF",
+  "processId": 36624,
+  "source": "a78358d1d09cf31b2b4d4c05f9bf6021d23dbe67",
+  "features": "tauri/custom-protocol"
+}

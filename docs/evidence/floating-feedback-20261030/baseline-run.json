@@ -1,0 +1,10 @@
+{
+  "dataDir": ".local/floating-feedback/baseline-data",
+  "startedAt": "2026-10-30T14:05:54.1326092+08:00",
+  "binary": ".local/floating-feedback/baseline/DitaListRust.exe",
+  "phase": "baseline",
+  "source": "a78358d1d09cf31b2b4d4c05f9bf6021d23dbe67",
+  "processId": 37472,
+  "identifier": "Naoko.DitaList.RustPreview.FloatingFeedback",
+  "sha256": "D96D622318C41DAC077893F26160DAD4ACD14D3C396E481FA5979AA890428F8F"
+}

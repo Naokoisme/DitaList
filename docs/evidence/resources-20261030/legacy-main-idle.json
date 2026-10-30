@@ -1,0 +1,43 @@
+{
+  "at": "2026-10-30T04:48:57.0338822Z",
+  "label": "legacy-1d51-main-idle",
+  "rootPid": 43240,
+  "durationSeconds": 3.5611968,
+  "cpuPercentOneCore": 0.0,
+  "privateBytes": 238497792.0,
+  "workingSetBytes": 422408192.0,
+  "processes": [
+    {
+      "pid": 43240,
+      "parent": 14408,
+      "name": "electron.exe",
+      "privateBytes": 87343104,
+      "workingSetBytes": 132997120,
+      "cpuSeconds": 9.453125
+    },
+    {
+      "pid": 29460,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 99246080,
+      "workingSetBytes": 133316608,
+      "cpuSeconds": 0.921875
+    },
+    {
+      "pid": 24968,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 14196736,
+      "workingSetBytes": 59682816,
+      "cpuSeconds": 2.453125
+    },
+    {
+      "pid": 47044,
+      "parent": 43240,
+      "name": "electron.exe",
+      "privateBytes": 37711872,
+      "workingSetBytes": 96411648,
+      "cpuSeconds": 0.40625
+    }
+  ]
+}

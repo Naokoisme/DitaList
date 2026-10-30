@@ -1,0 +1,9 @@
+{
+  "dataDir": ".local/floating-feedback/fixed-data",
+  "startedAt": "2026-10-30T14:27:55.1674707+08:00",
+  "binary": ".local/floating-feedback/fixed/DitaListRust.exe",
+  "identifier": "Naoko.DitaList.RustPreview.FloatingFeedback",
+  "originalInstalledPid": 46552,
+  "sha256": "FC374A89AB5EFB4980A5BA8398024F2A9D26D8813E762165107EEE3403EBA87C",
+  "processId": 49508
+}

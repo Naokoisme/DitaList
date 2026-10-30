@@ -1,0 +1,25 @@
+{
+  "verifiedAt": "2026-10-30T16:08:25.2044343+08:00",
+  "sourceCommit": "9e0220d4cd5516553e8ba5174d9ec254f2e44702",
+  "branch": "main",
+  "clean": true,
+  "version": "0.0.0",
+  "normalIdentity": true,
+  "zipEntriesVerified": 5,
+  "installedThisCandidate": false,
+  "isolatedTestBinarySha256": "ece5b4105aa59aab30ace8ff3485026d7699f591c5bea72436d305a9975fdee3",
+  "artifacts": [
+    {
+      "file": "DitaList-Rust-Preview-Portable.zip",
+      "bytes": 4268018,
+      "sha256": "5985ec5ed3faf6583b2ab5334c1d27aa9cd3db48e8e2b1f8a617f966fd106c73"
+    },
+    {
+      "file": "DitaList-Rust-Preview-Setup.exe",
+      "bytes": 4952661,
+      "sha256": "4ebcd51a072126c97ca1b11ded8ac763fd8aeb34fedc1561c91b0f4b3d3f11e7"
+    }
+  ],
+  "deliveryDirectory": "release/20261030-080620-9e0220d4cd55",
+  "buildDirectory": ".local/package-polish-9e0220d"
+}
