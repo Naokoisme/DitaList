@@ -1,7 +1,8 @@
 //! One Win32 UI thread owns all HWNDs and Direct2D resources.
 //! Owner-drawn standard buttons preserve the OS keyboard/accessibility providers.
 use super::DesktopAction;
-use super::position::{BarTransition, Dock, corner_diameter};
+use super::position::{BarTransition, Dock, corner_diameter, transition_rect};
+mod motion;
 use chrono::{DateTime, Local, Utc};
 use ditalist_contracts::{CoreSnapshot, Operation, ReminderEvent};
 use serde_json::json;
@@ -65,8 +66,10 @@ const DISMISS: usize = 24;
 
 #[derive(Clone, Copy)]
 pub struct Anchor {
+    pub left: f64,
     pub right: f64,
     pub top: f64,
+    pub bottom: f64,
     pub scale: f64,
     pub work_x: f64,
     pub work_y: f64,
@@ -76,8 +79,10 @@ pub struct Anchor {
 impl Default for Anchor {
     fn default() -> Self {
         Self {
+            left: 820.,
             right: 1000.,
             top: 700.,
+            bottom: 740.,
             scale: 1.,
             work_x: 0.,
             work_y: 0.,
@@ -90,6 +95,8 @@ impl Default for Anchor {
 pub enum NativeCommand {
     Snapshot(Box<CoreSnapshot>),
     InputActive(bool),
+    MainTransition(bool),
+    HoldForMain(bool),
     ShowReminders,
     BeginDrag { x: i32, y: i32 },
     Shutdown,
@@ -144,6 +151,18 @@ pub fn start(actions: mpsc::Sender<DesktopAction>) -> Result<NativeHandle, Strin
                     let _ = ready_tx.send(Ok(()));
                     let mut message = MSG::default();
                     while GetMessageW(&mut message, None, 0, 0).0 > 0 {
+                        if message.message == WM_KEYDOWN {
+                            let mut runtime = owner.runtime.borrow_mut();
+                            if runtime.transition.is_some()
+                                && (message.hwnd == runtime.bar
+                                    || IsChild(runtime.bar, message.hwnd).as_bool())
+                            {
+                                runtime.finish_reveal();
+                            }
+                            let bar = runtime.bar;
+                            drop(runtime);
+                            owner.flush(bar);
+                        }
                         if message.message == WM_KEYDOWN && message.wParam.0 == VK_ESCAPE.0 as usize
                         {
                             owner.runtime.borrow_mut().hide_panel();
@@ -256,6 +275,8 @@ struct Runtime {
     actions: mpsc::Sender<DesktopAction>,
     snapshot: Option<CoreSnapshot>,
     input_active: bool,
+    main_transition: bool,
+    held_for_main: bool,
     dragging: bool,
     dock: Dock,
     collapsed: bool,
@@ -263,6 +284,8 @@ struct Runtime {
     edge_hide_due: Option<Instant>,
     last_presentation: Option<(bool, bool)>,
     transition: Option<BarTransition>,
+    motion_surface: Option<motion::Surface>,
+    motion_press: Option<(usize, POINT)>,
     ignore_reveal_at: Option<POINT>,
     panel_state: Panel,
     panel_painted: bool,
@@ -337,6 +360,8 @@ impl Runtime {
                     actions,
                     snapshot: None,
                     input_active: false,
+                    main_transition: false,
+                    held_for_main: false,
                     dragging: false,
                     dock: Dock::default(),
                     collapsed: false,
@@ -344,6 +369,8 @@ impl Runtime {
                     edge_hide_due: None,
                     last_presentation: None,
                     transition: None,
+                    motion_surface: None,
+                    motion_press: None,
                     ignore_reveal_at: None,
                     panel_state: Panel::None,
                     panel_painted: false,
@@ -545,6 +572,26 @@ impl Runtime {
                         }
                         self.refresh(true);
                     }
+                    NativeCommand::MainTransition(active) => {
+                        self.stop_transition();
+                        self.main_transition = active;
+                        if active {
+                            self.hide_panel();
+                            self.cancel_edge_hide();
+                        }
+                        self.refresh(true);
+                        if !active && !cursor_inside(self.bar) {
+                            self.schedule_edge_hide();
+                        }
+                    }
+                    NativeCommand::HoldForMain(held) => {
+                        self.held_for_main = held;
+                        if held {
+                            self.finish_reveal();
+                        } else if !cursor_inside(self.bar) {
+                            self.schedule_edge_hide();
+                        }
+                    }
                     NativeCommand::ShowReminders => self.show_reminders(false),
                     NativeCommand::BeginDrag { x, y } => {
                         if GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 {
@@ -595,7 +642,9 @@ impl Runtime {
             let Some(snapshot) = self.snapshot.as_ref() else {
                 return;
             };
-            let visible = snapshot.preferences.floating_visible && !self.input_active;
+            let visible = snapshot.preferences.floating_visible
+                && !self.input_active
+                && !self.main_transition;
             let pending = snapshot.pending_count;
             let notify_agent = self.last_pending.is_some_and(|old| pending > old);
             self.last_pending = Some(pending);
@@ -701,8 +750,10 @@ impl Runtime {
             } else {
                 self.expanded_rect
             };
-            if let Some(motion) = &mut self.transition {
-                motion.target = target;
+            if self.transition.is_some() {
+                // A count change can grow the bar. Rebuild only when its layout
+                // changes, never once per animation frame.
+                self.motion_surface = None;
                 self.step_transition();
             } else {
                 self.apply_bar_frame(target);
@@ -732,12 +783,12 @@ impl Runtime {
                 scale,
             );
             for button in &self.buttons {
-                if button.shown && (!self.collapsed || self.transition.is_some()) {
+                if button.shown && !self.collapsed {
                     let _ = SetWindowPos(
                         button.hwnd,
                         None,
-                        (button.left * scale) as i32 + self.expanded_rect.left - rect.left,
-                        self.expanded_rect.top - rect.top,
+                        (button.left * scale) as i32,
+                        0,
                         (button.width * scale) as i32,
                         (40. * scale) as i32,
                         SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
@@ -798,8 +849,10 @@ impl Runtime {
             let rect = self.expanded_rect;
             let work = work_area(self.bar);
             *self.anchor.lock().unwrap_or_else(|e| e.into_inner()) = Anchor {
+                left: rect.left as f64,
                 right: rect.right as f64,
                 top: rect.top as f64,
+                bottom: rect.bottom as f64,
                 scale: (self.dpi / 96.) as f64,
                 work_x: work.left as f64,
                 work_y: work.top as f64,
@@ -820,12 +873,17 @@ impl Runtime {
         self.transition = None;
         unsafe {
             let _ = KillTimer(Some(self.bar), EDGE_ANIMATION_TIMER);
+            self.motion_surface = None;
+            let style = GetWindowLongW(self.bar, GWL_EXSTYLE) as u32;
+            if style & WS_EX_LAYERED.0 != 0 {
+                SetWindowLongW(self.bar, GWL_EXSTYLE, (style & !WS_EX_LAYERED.0) as i32);
+            }
         }
     }
 
     unsafe fn transition_to(&mut self, collapsed: bool) {
         unsafe {
-            self.stop_transition();
+            let was_collapsed = self.collapsed;
             self.collapsed = collapsed;
             let mut cursor = POINT::default();
             self.ignore_reveal_at = if collapsed && GetCursorPos(&mut cursor).is_ok() {
@@ -837,12 +895,16 @@ impl Runtime {
                 && client_animations_enabled()
                 && IsWindowVisible(self.bar).as_bool()
             {
-                let mut current = RECT::default();
-                let _ = GetWindowRect(self.bar, &mut current);
-                self.transition = Some(BarTransition::new(current, Instant::now()));
+                let now = Instant::now();
+                let motion = self
+                    .transition
+                    .get_or_insert_with(|| BarTransition::new(was_collapsed, now));
+                motion.retarget(collapsed, now);
                 if SetTimer(Some(self.bar), EDGE_ANIMATION_TIMER, 16, None) == 0 {
-                    self.transition = None;
+                    self.stop_transition();
                 }
+            } else {
+                self.stop_transition();
             }
             self.layout();
         }
@@ -850,20 +912,58 @@ impl Runtime {
 
     unsafe fn step_transition(&mut self) {
         unsafe {
-            let Some(motion) = &self.transition else {
+            let Some(motion) = &mut self.transition else {
                 return;
             };
-            let (rect, complete) = motion.frame(Instant::now());
+            let full = self.expanded_rect;
+            let line = self
+                .dock
+                .collapsed_rect(full, work_area(self.bar), self.dpi);
+            let travel = (full.right - full.left).max(full.bottom - full.top) as f64;
+            let (progress, complete) = motion.frame(Instant::now(), travel);
+            let rect = transition_rect(line, full, progress);
             if complete {
                 self.stop_transition();
+                self.apply_bar_frame(rect);
+            } else if let Err(error) = self.paint_transition(rect, progress) {
+                self.stop_transition();
+                self.layout();
+                let _ = self.actions.send(DesktopAction::Error(format!(
+                    "悬浮栏转场已恢复静态显示：{error}"
+                )));
             }
-            self.apply_bar_frame(rect);
             if complete {
                 self.update_anchor();
                 if !self.collapsed && !cursor_inside(self.bar) {
                     self.schedule_edge_hide();
                 }
             }
+        }
+    }
+
+    unsafe fn paint_transition(&mut self, rect: RECT, progress: f32) -> windows::core::Result<()> {
+        unsafe {
+            if self.motion_surface.is_none() {
+                let full = self.expanded_rect;
+                let surface = motion::Surface::new(
+                    full.right - full.left,
+                    full.bottom - full.top,
+                    self.dpi / 96.,
+                    &self.buttons,
+                    self.theme(),
+                )?;
+                self.motion_surface = Some(surface);
+                for button in &self.buttons {
+                    let _ = ShowWindow(button.hwnd, SW_HIDE);
+                }
+                let _ = SetWindowRgn(self.bar, None, false);
+                let style = GetWindowLongW(self.bar, GWL_EXSTYLE) as u32;
+                SetWindowLongW(self.bar, GWL_EXSTYLE, (style | WS_EX_LAYERED.0) as i32);
+            }
+            self.motion_surface
+                .as_ref()
+                .unwrap()
+                .present(self.bar, rect, progress)
         }
     }
 
@@ -879,11 +979,63 @@ impl Runtime {
     }
 
     fn can_collapse(&self) -> bool {
+        let keyboard_focus = unsafe {
+            let focus = GetFocus();
+            GetForegroundWindow() == self.bar
+                && IsChild(self.bar, focus).as_bool()
+                && SendMessageW(focus, WM_QUERYUISTATE, None, None).0 & UISF_HIDEFOCUS as isize == 0
+        };
         self.dock.is_docked()
             && !self.collapsed
             && !self.dragging
             && !self.input_active
+            && !self.main_transition
+            && !self.held_for_main
+            && !keyboard_focus
             && matches!(self.panel_state, Panel::None)
+    }
+
+    unsafe fn press_transition(&mut self) {
+        unsafe {
+            if self.transition.is_none() && !self.collapsed {
+                return;
+            }
+            let mut point = POINT::default();
+            let mut rect = RECT::default();
+            let _ = GetCursorPos(&mut point);
+            let _ = GetWindowRect(self.bar, &mut rect);
+            let full = self.expanded_rect;
+            let scale = ((rect.right - rect.left) as f32 / (full.right - full.left) as f32)
+                .min((rect.bottom - rect.top) as f32 / (full.bottom - full.top) as f32);
+            let offset =
+                ((rect.right - rect.left) as f32 - (full.right - full.left) as f32 * scale) / 2.;
+            let x = ((point.x - rect.left) as f32 - offset) / scale / (self.dpi / 96.);
+            let id = self
+                .buttons
+                .iter()
+                .find(|b| b.shown && x >= b.left && x < b.left + b.width)
+                .map(|b| b.id);
+            self.finish_reveal();
+            if let Some(id) = id {
+                self.motion_press = Some((id, point));
+                SetCapture(self.bar);
+            }
+        }
+    }
+
+    unsafe fn release_transition_press(&mut self) {
+        unsafe {
+            if let Some((id, origin)) = self.motion_press.take() {
+                let _ = ReleaseCapture();
+                let mut point = POINT::default();
+                let _ = GetCursorPos(&mut point);
+                if (point.x - origin.x).abs() <= GetSystemMetrics(SM_CXDRAG)
+                    && (point.y - origin.y).abs() <= GetSystemMetrics(SM_CYDRAG)
+                {
+                    self.command(id);
+                }
+            }
+        }
     }
 
     unsafe fn schedule_edge_hide(&mut self) {
@@ -1109,10 +1261,12 @@ impl Runtime {
         unsafe {
             let action = match id {
                 TODAY => Some(DesktopAction::Navigate {
+                    from_bar: true,
                     view: "today".into(),
                     task_id: None,
                 }),
                 PENDING => Some(DesktopAction::Navigate {
+                    from_bar: true,
                     view: "agent-review".into(),
                     task_id: None,
                 }),
@@ -1145,11 +1299,13 @@ impl Runtime {
                             .and_then(|s| s.reminders.iter().find(|r| &r.id == id))
                             .map(|r| r.task_id.clone());
                         Some(DesktopAction::Navigate {
+                            from_bar: true,
                             view: "today".into(),
                             task_id,
                         })
                     }
                     Panel::Agent { .. } => Some(DesktopAction::Navigate {
+                        from_bar: true,
                         view: "agent-review".into(),
                         task_id: None,
                     }),
@@ -1246,6 +1402,12 @@ impl Runtime {
         unsafe {
             let mut paint = PAINTSTRUCT::default();
             let hdc = BeginPaint(hwnd, &mut paint);
+            if hwnd == self.bar && self.transition.is_some() {
+                // Layered frames own every pixel while moving. A queued WM_PAINT
+                // must not paint the old opaque owner-drawn surface over them.
+                let _ = EndPaint(hwnd, &paint);
+                return;
+            }
             let mut rect = RECT::default();
             let _ = GetClientRect(hwnd, &mut rect);
             let theme = self.theme();
@@ -1369,6 +1531,10 @@ unsafe extern "system" fn window_proc(
                 | FINISH_REVEAL
                 | WM_MOUSEMOVE
                 | WM_MOUSELEAVE
+                | WM_LBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_CAPTURECHANGED
+                | WM_KEYDOWN
                 | WM_PAINT
                 | WM_ERASEBKGND
                 | WM_DRAWITEM
@@ -1464,6 +1630,44 @@ unsafe extern "system" fn window_proc(
                 if hwnd == runtime.bar {
                     track_mouse_leave(hwnd);
                     runtime.pointer_changed();
+                    if let Some((DRAG, origin)) = runtime.motion_press {
+                        let mut point = POINT::default();
+                        let _ = GetCursorPos(&mut point);
+                        if (point.x - origin.x).abs() > GetSystemMetrics(SM_CXDRAG)
+                            || (point.y - origin.y).abs() > GetSystemMetrics(SM_CYDRAG)
+                        {
+                            runtime.motion_press = None;
+                            let _ = ReleaseCapture();
+                            let position =
+                                ((point.y as u32 & 0xffff) << 16) | (point.x as u32 & 0xffff);
+                            let _ = PostMessageW(
+                                Some(hwnd),
+                                WM_NCLBUTTONDOWN,
+                                WPARAM(HTCAPTION as usize),
+                                LPARAM(position as isize),
+                            );
+                        }
+                    }
+                }
+                DefWindowProcW(hwnd, message, wparam, lparam)
+            }
+            WM_LBUTTONDOWN if hwnd == runtime.bar => {
+                runtime.press_transition();
+                LRESULT(0)
+            }
+            WM_LBUTTONUP if hwnd == runtime.bar => {
+                runtime.release_transition_press();
+                LRESULT(0)
+            }
+            WM_CAPTURECHANGED if hwnd == runtime.bar => {
+                runtime.motion_press = None;
+                runtime.pointer_changed();
+                LRESULT(0)
+            }
+            WM_KEYDOWN if hwnd == runtime.bar => {
+                runtime.finish_reveal();
+                if let Some(button) = runtime.buttons.iter().find(|b| b.id == TODAY) {
+                    let _ = SetFocus(Some(button.hwnd));
                 }
                 DefWindowProcW(hwnd, message, wparam, lparam)
             }
@@ -1722,7 +1926,7 @@ unsafe fn cursor_inside(hwnd: HWND) -> bool {
     }
 }
 
-fn client_animations_enabled() -> bool {
+pub(super) fn client_animations_enabled() -> bool {
     unsafe {
         let mut enabled = BOOL(1);
         let _ = SystemParametersInfoW(
@@ -1833,13 +2037,17 @@ impl Renderer {
     }
 
     unsafe fn new() -> windows::core::Result<Self> {
+        unsafe { Self::with_alpha(D2D1_ALPHA_MODE_IGNORE) }
+    }
+
+    unsafe fn with_alpha(alpha_mode: D2D1_ALPHA_MODE) -> windows::core::Result<Self> {
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
             let target = factory.CreateDCRenderTarget(&D2D1_RENDER_TARGET_PROPERTIES {
                 r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
                 pixelFormat: D2D1_PIXEL_FORMAT {
                     format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                    alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                    alphaMode: alpha_mode,
                 },
                 dpiX: 96.,
                 dpiY: 96.,

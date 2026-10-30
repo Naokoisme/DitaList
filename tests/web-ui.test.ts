@@ -142,6 +142,100 @@ test("window controls preserve keyboard feedback and form focus on return", asyn
   } finally { await page.close(); }
 });
 
+for (const theme of ["light", "dark"] as const) {
+  test(`main morph moves the real app from an external bar without changing its layout (${theme})`, async () => {
+    const state = fixture(); state.data.settings.theme = theme;
+    const page = await open("", state);
+    try {
+      await page.setViewportSize({width: 1920, height: 1080});
+      const intent = {phase: "prepare", id: 7, maximized: false, bar: {today: 1, pending: 2, reminders: 0},
+        from: {x: 1636, y: 960, width: 284, height: 40}, to: {x: 350, y: 100, width: 1140, height: 780}};
+      await page.evaluate((value) => (window as any).__fixture.emit("desktop://main-motion", value), intent);
+      await page.waitForFunction(() => (window as any).__fixture.actions.some((action: any) => action.action === "mainMotionPrepared"));
+      assert.deepEqual(await page.locator("#main-window-surface").boundingBox(), intent.from);
+      assert.equal(await page.locator("#main-window-surface").evaluate((node) => getComputedStyle(node).backgroundColor),
+        theme === "dark" ? "rgb(41, 43, 48)" : "rgb(255, 255, 255)");
+      assert.equal(await page.locator("#main-window-bar-origin span").first().evaluate((node) => getComputedStyle(node).color),
+        theme === "dark" ? "rgb(231, 232, 236)" : "rgb(51, 55, 65)");
+      assert.equal(await page.locator("#main-window-content").evaluate((node) => (node as HTMLElement).offsetWidth), 1140);
+      assert.equal(await page.locator("#main-window-surface").evaluate((node) => (node as HTMLElement).inert), true);
+      await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "start", id: 7}));
+      await page.waitForFunction(() => document.documentElement.dataset.mainMotion === "running");
+      await page.evaluate(() => document.getAnimations().forEach((animation) => { animation.pause(); animation.currentTime = 170; }));
+      const middle = await page.locator("#main-window-surface").boundingBox();
+      assert.ok(middle && middle.x > intent.to.x && middle.x < intent.from.x);
+      assert.ok(middle.width > intent.from.width && middle.width < intent.to.width);
+      assert.equal(await page.locator("#main-window-content").evaluate((node) => (node as HTMLElement).offsetWidth), 1140);
+      const scale = await page.locator("#main-window-content").evaluate((node) => {
+        const matrix = new DOMMatrix(getComputedStyle(node).transform); return [matrix.a, matrix.d];
+      });
+      assert.ok(Math.abs(scale[0] - scale[1]) < .00001, "text and content scale equally on both axes");
+      await page.screenshot({path: `tests/web-evidence/main-morph-${theme}.png`});
+      await page.evaluate(() => document.getAnimations().forEach((animation) => animation.finish()));
+      await page.waitForFunction(() => (window as any).__fixture.actions.some((action: any) => action.action === "mainMotionFinished"));
+      await page.setViewportSize({width: 1140, height: 780});
+      await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "settled", id: 7}));
+      assert.deepEqual(await page.locator("#main-window-surface").boundingBox(), {x: 0, y: 0, width: 1140, height: 780});
+      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+      assert.equal(await page.locator("#main-window-surface").evaluate((node) => (node as HTMLElement).inert), false);
+      assert.equal(await page.getByRole("heading", {name: "所有任务", exact: true}).count(), 1);
+    } finally { await page.close(); }
+  });
+}
+
+test("main morph honors reduced motion and keeps compact navigation at the target size", async () => {
+  const page = await open();
+  try {
+    await page.setViewportSize({width: 1600, height: 900});
+    await page.emulateMedia({reducedMotion: "reduce"});
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {
+      phase: "prepare", id: 10, maximized: false, bar: {today: 1, pending: 0, reminders: 0},
+      from: {x: 1420, y: 840, width: 180, height: 40}, to: {x: 100, y: 60, width: 600, height: 700},
+    }));
+    await page.waitForFunction(() => (window as any).__fixture.actions.some((action: any) => action.action === "mainMotionFinished"));
+    assert.equal(await page.locator(".window-controls").evaluate((node) => getComputedStyle(node).display), "none");
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+    assert.equal(await page.evaluate(() => (window as any).__fixture.actions.some((action: any) => action.action === "mainMotionPrepared")), false);
+    await page.setViewportSize({width: 600, height: 700});
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "settled", id: 10}));
+    assert.equal(await page.locator("#main-window-surface").evaluate((node) => (node as HTMLElement).inert), false);
+  } finally { await page.close(); }
+});
+
+test("main morph cancel and a later reopen ignore the old completion", async () => {
+  const page = await open();
+  try {
+    const intent = {phase: "prepare", id: 20, maximized: false, bar: {today: 1, pending: 0, reminders: 0},
+      from: {x: 950, y: 780, width: 180, height: 40}, to: {x: 0, y: 0, width: 1180, height: 820}};
+    await page.evaluate((value) => (window as any).__fixture.emit("desktop://main-motion", value), intent);
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "start", id: 20}));
+    await page.waitForFunction(() => document.documentElement.dataset.mainMotion === "running");
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "settled", id: 20}));
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+    await page.evaluate((value) => (window as any).__fixture.emit("desktop://main-motion", value), {...intent, id: 21});
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "settled", id: 20}));
+    assert.equal(await page.evaluate(() => document.documentElement.dataset.mainMotion), "prepared");
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "settled", id: 21}));
+    assert.equal(await page.locator("#main-window-surface").evaluate((node) => (node as HTMLElement).inert), false);
+  } finally { await page.close(); }
+});
+
+test("main morph preserves maximized corners after handoff and restores normal corners", async () => {
+  const page = await open();
+  try {
+    await page.emulateMedia({reducedMotion: "reduce"});
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {
+      phase: "prepare", id: 30, maximized: true, bar: {today: 1, pending: 0, reminders: 0},
+      from: {x: 980, y: 780, width: 180, height: 40}, to: {x: 0, y: 0, width: 1180, height: 820},
+    }));
+    await page.waitForFunction(() => (window as any).__fixture.actions.some((action: any) => action.action === "mainMotionFinished"));
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "settled", id: 30}));
+    assert.equal(await page.locator("#main-window-surface").evaluate((node) => getComputedStyle(node).borderRadius), "0px");
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://main-window-state", {maximized: false}));
+    assert.equal(await page.locator("#main-window-surface").evaluate((node) => getComputedStyle(node).borderRadius), "8px");
+  } finally { await page.close(); }
+});
+
 test("pending Agent changes remain quiet until opened; approval uses the proposal id", async () => {
   const page = await open();
   try {

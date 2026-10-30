@@ -449,11 +449,32 @@ async fn backup_import(app: tauri::AppHandle) -> Result<Option<String>, CoreErro
         .map_err(|e| CoreError::new("io", e.to_string()))
 }
 
+// A debug-only launch path exercises the real bar-to-window host transition
+// without synthesizing mouse input; packaged builds never enable this probe.
+fn main_launch_intent(args: &[String]) -> Value {
+    if cfg!(debug_assertions) && args.iter().any(|arg| arg == "--motion-probe") {
+        json!({"view":"today","fromBar":true})
+    } else {
+        Value::Null
+    }
+}
+
+fn queue_main_launch(app: &tauri::AppHandle, payload: Value) {
+    // Single-instance/setup callbacks run on the UI thread. It must stay free
+    // while the presentation worker queries or changes window geometry.
+    let app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Err(error) = present(&app, "openMain", payload) {
+            report_error(&app, &CoreError::new("desktop", error));
+        }
+    });
+}
+
 fn main() {
     let quit_requested = std::env::args().any(|arg| arg == "--quit");
     let data_dir = default_data_dir();
     let builder=tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app,args,_| { if args.iter().any(|arg|arg=="--quit") {request_quit(app.clone());} else if app.try_state::<Host>().is_some() {let _=present(app,"openMain",Value::Null);} }))
+        .plugin(tauri_plugin_single_instance::init(|app,args,_| { if args.iter().any(|arg|arg=="--quit") {request_quit(app.clone());} else if app.try_state::<Host>().is_some() {queue_main_launch(app,main_launch_intent(&args));} }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -493,7 +514,7 @@ fn main() {
                 while let Ok(action)=rx.recv() {
                     match action {
                         DesktopAction::Command(operation)=>{let a=handle.clone();tauri::async_runtime::spawn(async move{if let Err(e)=execute(a.clone(),CoreCommand{request_id:uuid::Uuid::new_v4().to_string(),operation}).await{report_error(&a,&e);}});},
-                        DesktopAction::Navigate{view,task_id}=>{let _=present(&handle,"openMain",json!({"view":view,"taskId":task_id}));},
+                        DesktopAction::Navigate{view,task_id,from_bar}=>{let _=present(&handle,"openMain",json!({"view":view,"taskId":task_id,"fromBar":from_bar}));},
                         DesktopAction::OpenQuick=>{let _=present(&handle,"openQuick",Value::Null);},
                         DesktopAction::Quit=>request_quit(handle.clone()),
                         DesktopAction::Wake=>handle.state::<Host>().wake.notify_one(),
@@ -503,7 +524,8 @@ fn main() {
                     }
                 }
             })?;
-            if std::env::args().any(|arg|arg=="--main") {present(app.handle(),"openMain",Value::Null).map_err(std::io::Error::other)?;}
+            let args = std::env::args().collect::<Vec<_>>();
+            if args.iter().any(|arg|arg=="--main" || (cfg!(debug_assertions) && arg=="--motion-probe")) {queue_main_launch(app.handle(),main_launch_intent(&args));}
             Ok(())
         });
     let app = builder

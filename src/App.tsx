@@ -72,6 +72,7 @@ import {
   parseQuickInput,
 } from "./core/domain";
 import { desktopAction, desktopStatus, errorMessage, executeOperation, exportBackup, getSnapshot, importBackup, watchCore, watchNavigation, type Snapshot } from "./core/client";
+import { installMainMotion } from "./desktop/mainMotion";
 import { listen } from "@tauri-apps/api/event";
 import type { CommandReceipt, Operation } from "./generated/contracts";
 import AgentReviewPanel from "./components/AgentReviewPanel";
@@ -367,6 +368,7 @@ export default function App() {
     const keep = (cleanup: () => void) => canceled ? cleanup() : cleanups.push(cleanup);
     const report = (error: unknown) => { if (!canceled) setLoadError(errorMessage(error)); };
     void (async () => {
+      keep(await installMainMotion(report));
       keep(await watchNavigation((intent) => {
         setWindowControlHover(null);
         if (intent.view) { setView(intent.view as ViewId); setSelectedId(null); }

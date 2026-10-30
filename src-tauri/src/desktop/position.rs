@@ -2,37 +2,65 @@
 use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{POINT, RECT};
 
-pub(super) const TRANSITION_DURATION: Duration = Duration::from_millis(180);
-
 pub(super) struct BarTransition {
-    from: RECT,
-    pub(super) target: RECT,
-    started: Instant,
+    progress: f64,
+    velocity: f64,
+    target: f64,
+    updated: Instant,
+    changed: Instant,
 }
 
 impl BarTransition {
-    pub(super) fn new(from: RECT, started: Instant) -> Self {
+    pub(super) fn new(collapsed: bool, now: Instant) -> Self {
+        let progress = if collapsed { 0. } else { 1. };
         Self {
-            from,
-            target: from,
-            started,
+            progress,
+            velocity: 0.,
+            target: progress,
+            updated: now,
+            changed: now,
         }
     }
 
-    pub(super) fn frame(&self, now: Instant) -> (RECT, bool) {
-        let elapsed = now.saturating_duration_since(self.started);
-        let progress = (elapsed.as_secs_f32() / TRANSITION_DURATION.as_secs_f32()).min(1.);
-        let eased = 1. - (1. - progress).powi(3);
-        let mix = |start: i32, end: i32| start + ((end - start) as f32 * eased).round() as i32;
-        (
-            RECT {
-                left: mix(self.from.left, self.target.left),
-                top: mix(self.from.top, self.target.top),
-                right: mix(self.from.right, self.target.right),
-                bottom: mix(self.from.bottom, self.target.bottom),
-            },
-            elapsed >= TRANSITION_DURATION,
-        )
+    pub(super) fn retarget(&mut self, collapsed: bool, now: Instant) {
+        self.advance(now);
+        self.target = if collapsed { 0. } else { 1. };
+        self.changed = now;
+    }
+
+    fn advance(&mut self, now: Instant) {
+        // Analytic critically damped spring: retargeting preserves both position
+        // and velocity, and timer jitter does not change the path or settling time.
+        let dt = now.saturating_duration_since(self.updated).as_secs_f64();
+        let omega = 22.;
+        let displacement = self.progress - self.target;
+        let impulse = self.velocity + omega * displacement;
+        let decay = (-omega * dt).exp();
+        self.progress = self.target + (displacement + impulse * dt) * decay;
+        self.velocity = (self.velocity - omega * impulse * dt) * decay;
+        self.updated = now;
+    }
+
+    pub(super) fn frame(&mut self, now: Instant, travel: f64) -> (f32, bool) {
+        self.advance(now);
+        let complete = ((self.progress - self.target).abs() * travel < 0.25
+            && self.velocity.abs() * travel < 2.)
+            || now.saturating_duration_since(self.changed) >= Duration::from_millis(900);
+        if complete {
+            self.progress = self.target;
+            self.velocity = 0.;
+        }
+        (self.progress.clamp(0., 1.) as f32, complete)
+    }
+}
+
+pub(super) fn transition_rect(line: RECT, expanded: RECT, progress: f32) -> RECT {
+    let mix = |from: i32, to: i32| from + ((to - from) as f32 * progress).round() as i32;
+    RECT {
+        left: mix(line.left, expanded.left),
+        top: mix(line.top, expanded.top),
+        right: mix(line.right, expanded.right),
+        bottom: mix(line.bottom, expanded.bottom),
     }
 }
 
@@ -309,31 +337,54 @@ mod tests {
         let start = Instant::now();
         let full = rect(-180, 300, 180, 40);
         let line = rect(-4, 308, 4, 24);
-        let mut motion = BarTransition::new(full, start);
-        motion.target = line;
-        assert_eq!(motion.frame(start), (full, false));
-        let (middle, done) = motion.frame(start + Duration::from_millis(90));
-        assert!(!done);
-        assert!(middle.left > full.left && middle.left < line.left);
-        assert_eq!(middle.right, 0);
-        assert!(middle.top >= full.top && middle.bottom <= full.bottom);
-        assert_eq!(motion.frame(start + TRANSITION_DURATION), (line, true));
-        assert_eq!(motion.frame(start + Duration::from_secs(1)), (line, true));
+        let mut motion = BarTransition::new(false, start);
+        motion.retarget(true, start);
+        assert_eq!(motion.frame(start, 176.), (1., false));
+        let mut previous = 1.;
+        for ms in (16..700).step_by(16) {
+            let (progress, _) = motion.frame(start + Duration::from_millis(ms), 176.);
+            assert!(progress <= previous && progress >= 0.);
+            let frame = transition_rect(line, full, progress);
+            assert_eq!(frame.right, 0);
+            assert!(frame.top >= full.top && frame.bottom <= full.bottom);
+            previous = progress;
+        }
+        assert_eq!(
+            motion.frame(start + Duration::from_secs(1), 176.),
+            (0., true)
+        );
     }
 
     #[test]
-    fn reversing_a_transition_starts_from_the_current_visible_rectangle() {
+    fn reversing_preserves_position_and_velocity_and_still_settles() {
         let start = Instant::now();
-        let full = rect(600, 0, 180, 40);
-        let line = rect(658, 0, 64, 4);
-        let mut closing = BarTransition::new(full, start);
-        closing.target = line;
+        let mut closing = BarTransition::new(false, start);
+        closing.retarget(true, start);
         let now = start + Duration::from_millis(60);
-        let current = closing.frame(now).0;
-        let mut opening = BarTransition::new(current, now);
-        opening.target = full;
-        assert_eq!(opening.frame(now).0, current);
-        assert_eq!(opening.frame(now + TRANSITION_DURATION), (full, true));
+        let current = closing.frame(now, 360.).0;
+        let velocity = closing.velocity;
+        closing.retarget(false, now);
+        assert_eq!(closing.frame(now, 360.).0, current);
+        assert_eq!(closing.velocity, velocity);
+        assert!(closing.frame(now + Duration::from_millis(1), 360.).0 < current);
+        assert_eq!(
+            closing.frame(now + Duration::from_secs(1), 360.),
+            (1., true)
+        );
+    }
+
+    #[test]
+    fn spring_path_is_independent_of_timer_frequency() {
+        let start = Instant::now();
+        let mut regular = BarTransition::new(true, start);
+        regular.retarget(false, start);
+        let mut delayed = BarTransition::new(true, start);
+        delayed.retarget(false, start);
+        for ms in (8..=128).step_by(8) {
+            regular.frame(start + Duration::from_millis(ms), 360.);
+        }
+        let time = start + Duration::from_millis(128);
+        assert!((regular.frame(time, 360.).0 - delayed.frame(time, 360.).0).abs() < 0.00001);
     }
 
     #[test]

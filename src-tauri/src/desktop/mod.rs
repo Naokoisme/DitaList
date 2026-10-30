@@ -18,6 +18,7 @@ pub enum DesktopAction {
     Navigate {
         view: String,
         task_id: Option<String>,
+        from_bar: bool,
     },
     OpenQuick,
     Wake,
@@ -34,6 +35,8 @@ struct State {
     snapshot: Option<CoreSnapshot>,
     quick_open: bool,
     main_ready: bool,
+    main_from_bar: bool,
+    main_motion: Option<MainMotion>,
     after_quick: Option<AfterQuick>,
     quick_generation: u64,
     main_generation: u64,
@@ -48,11 +51,26 @@ enum AfterQuick {
     ShowReminders,
 }
 
+#[derive(Clone, Copy)]
+struct MainFrame {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+}
+
+struct MainMotion {
+    id: u64,
+    restore: MainFrame,
+    prepared: bool,
+}
+
 struct Inner {
     app: AppHandle,
     actions: mpsc::Sender<DesktopAction>,
     native: native::NativeHandle,
     state: Mutex<State>,
+    presentation: Mutex<()>,
     tray: Mutex<Option<TrayItems>>,
 }
 
@@ -77,11 +95,14 @@ impl Desktop {
                 app: app.clone(),
                 actions: actions.clone(),
                 native,
+                presentation: Mutex::new(()),
                 tray: Mutex::new(None),
                 state: Mutex::new(State {
                     snapshot: None,
                     quick_open: false,
                     main_ready: false,
+                    main_from_bar: false,
+                    main_motion: None,
                     after_quick: None,
                     quick_generation: 0,
                     main_generation: 0,
@@ -257,11 +278,20 @@ impl Desktop {
     }
 
     pub fn action(&self, action: &str, payload: Value) -> Result<(), String> {
+        // Renderer acknowledgements, native clicks and close requests arrive on
+        // different threads. Keep their window handoffs in one order.
+        let _presentation = self
+            .inner
+            .presentation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         match action {
             "openMain" => self.open_main(payload),
             "openQuick" => self.open_quick(),
             "closeQuick" => self.close_quick(),
             "closeMain" => self.close_main(),
+            "mainMotionPrepared" => self.main_motion_prepared(&payload),
+            "mainMotionFinished" => self.finish_main_motion(&payload, true),
             "ready" => self.ready(
                 payload
                     .get("window")
@@ -318,6 +348,20 @@ impl Desktop {
     }
 
     fn open_main(&self, payload: Value) -> Result<(), String> {
+        let from_bar = payload.get("fromBar").and_then(Value::as_bool) == Some(true);
+        self.inner
+            .native
+            .send(native::NativeCommand::HoldForMain(from_bar));
+        let result = self.open_main_inner(payload, from_bar);
+        if result.is_err() {
+            self.inner
+                .native
+                .send(native::NativeCommand::HoldForMain(false));
+        }
+        result
+    }
+
+    fn open_main_inner(&self, payload: Value, from_bar: bool) -> Result<(), String> {
         if self.handoff_quick(AfterQuick::OpenMain(payload.clone()))? {
             return Ok(());
         }
@@ -334,8 +378,11 @@ impl Desktop {
         };
         {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-            if existing.is_none() || state.main_ready {
+            if existing.is_none() || (state.main_ready && state.main_motion.is_none()) {
                 state.main_generation += 1;
+            }
+            if state.main_motion.is_none() {
+                state.main_from_bar = from_bar;
             }
             if let Some(navigation) = &navigation {
                 state.navigation = navigation.clone();
@@ -351,15 +398,12 @@ impl Desktop {
             {
                 return Ok(());
             }
-            window.unminimize().map_err(|e| e.to_string())?;
-            window.show().map_err(|e| e.to_string())?;
-            window.set_focus().map_err(|e| e.to_string())?;
             if let Some(navigation) = navigation {
                 window
                     .emit("desktop://navigate", navigation)
                     .map_err(|e| e.to_string())?;
             }
-            return Ok(());
+            return self.present_main(&window);
         }
         self.inner
             .state
@@ -375,6 +419,9 @@ impl Desktop {
         .inner_size(1140., 780.)
         .min_inner_size(480., 500.)
         .decorations(false)
+        .transparent(true)
+        .no_redirection_bitmap(true)
+        .shadow(false)
         // Windows needs the WebView2 HTML5 handler for calendar drag-and-drop.
         .disable_drag_drop_handler()
         .visible(false)
@@ -383,6 +430,274 @@ impl Desktop {
         Self::attach_close_handoff(&window, "main");
         self.creation_timeout("main");
         Ok(())
+    }
+
+    fn present_main(&self, window: &WebviewWindow) -> Result<(), String> {
+        let from_bar = {
+            let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.main_motion.is_some() {
+                return Ok(());
+            }
+            std::mem::take(&mut state.main_from_bar)
+        };
+        if from_bar
+            && self.floating_visible()
+            && native::client_animations_enabled()
+            && !window.is_visible().unwrap_or(true)
+            && !window.is_minimized().unwrap_or(true)
+        {
+            match self.begin_main_motion(window) {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(error) => {
+                    let _ = self.finish_main_motion(&Value::Null, false);
+                    let _ = self.inner.actions.send(DesktopAction::Error(format!(
+                        "主窗口转场未能启动，已恢复普通显示：{error}"
+                    )));
+                }
+            }
+        }
+        self.inner
+            .native
+            .send(native::NativeCommand::HoldForMain(false));
+        window.unminimize().map_err(|e| e.to_string())?;
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())
+    }
+
+    fn begin_main_motion(&self, window: &WebviewWindow) -> Result<bool, String> {
+        let anchor = self.inner.native.anchor();
+        let maximized = window.is_maximized().map_err(|e| e.to_string())?;
+        let monitor = window.current_monitor().map_err(|e| e.to_string())?;
+        let same_monitor = monitor.as_ref().is_some_and(|monitor| {
+            let p = monitor.position();
+            let s = monitor.size();
+            let x = (anchor.left + anchor.right) / 2.;
+            let y = (anchor.top + anchor.bottom) / 2.;
+            x >= p.x as f64
+                && x < p.x as f64 + s.width as f64
+                && y >= p.y as f64
+                && y < p.y as f64 + s.height as f64
+        });
+        // A hidden restored window follows the bar to its monitor. Keeping the
+        // whole transition on one DPI avoids a font-size jump during handoff.
+        if !same_monitor {
+            if maximized {
+                return Ok(false);
+            }
+            let size = window.inner_size().map_err(|e| e.to_string())?;
+            let old_scale = window.scale_factor().map_err(|e| e.to_string())?;
+            let width = (size.width as f64 / old_scale * anchor.scale)
+                .min(anchor.work_width)
+                .max(1.);
+            let height = (size.height as f64 / old_scale * anchor.scale)
+                .min(anchor.work_bottom - anchor.work_y)
+                .max(1.);
+            window
+                .set_position(tauri::PhysicalPosition::new(
+                    (anchor.work_x + (anchor.work_width - width) / 2.).round() as i32,
+                    (anchor.work_y + (anchor.work_bottom - anchor.work_y - height) / 2.).round()
+                        as i32,
+                ))
+                .map_err(|e| e.to_string())?;
+            window
+                .set_size(tauri::PhysicalSize::new(
+                    width.round() as u32,
+                    height.round() as u32,
+                ))
+                .map_err(|e| e.to_string())?;
+        }
+        let position = window.outer_position().map_err(|e| e.to_string())?;
+        let size = window.outer_size().map_err(|e| e.to_string())?;
+        let restore = MainFrame {
+            x: position.x,
+            y: position.y,
+            width: size.width,
+            height: size.height,
+        };
+        let target_position = window.inner_position().map_err(|e| e.to_string())?;
+        let target_size = window.inner_size().map_err(|e| e.to_string())?;
+        let target_right = target_position.x as f64 + target_size.width as f64;
+        let target_bottom = target_position.y as f64 + target_size.height as f64;
+        let left = (target_position.x as f64).min(anchor.left);
+        let top = (target_position.y as f64).min(anchor.top);
+        let right = target_right.max(anchor.right);
+        let bottom = target_bottom.max(anchor.bottom);
+        if maximized
+            && (left < target_position.x as f64
+                || top < target_position.y as f64
+                || right > target_right
+                || bottom > target_bottom)
+        {
+            return Ok(false);
+        }
+        let id = {
+            let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            let id = state.main_generation;
+            state.main_motion = Some(MainMotion {
+                id,
+                restore,
+                prepared: false,
+            });
+            id
+        };
+        if !maximized {
+            // Resize the HWND only at the two ends. During motion its WebView is
+            // one transparent canvas, while the actual App keeps its final layout.
+            Self::set_main_frame(
+                window,
+                MainFrame {
+                    x: left.round() as i32 - (target_position.x - position.x),
+                    y: top.round() as i32 - (target_position.y - position.y),
+                    width: (right - left).round() as u32 + (size.width - target_size.width),
+                    height: (bottom - top).round() as u32 + (size.height - target_size.height),
+                },
+            )?;
+        }
+        let canvas = window.inner_position().map_err(|e| e.to_string())?;
+        let scale = window.scale_factor().map_err(|e| e.to_string())?;
+        let bar = {
+            let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            let snapshot = state.snapshot.as_ref();
+            json!({
+                "today":snapshot.map(|s|s.today_count).unwrap_or(0),
+                "pending":snapshot.map(|s|s.pending_count).unwrap_or(0),
+                "reminders":snapshot.map(|s|s.reminder_count).unwrap_or(0)
+            })
+        };
+        window.emit("desktop://main-motion", json!({
+            "phase":"prepare", "id":id, "maximized":maximized, "bar":bar,
+            "from":{"x":(anchor.left-canvas.x as f64)/scale,"y":(anchor.top-canvas.y as f64)/scale,
+                "width":(anchor.right-anchor.left)/scale,"height":(anchor.bottom-anchor.top)/scale},
+            "to":{"x":(target_position.x-canvas.x) as f64/scale,"y":(target_position.y-canvas.y) as f64/scale,
+                "width":target_size.width as f64/scale,"height":target_size.height as f64/scale}
+        })).map_err(|e| e.to_string())?;
+        let weak = Arc::downgrade(&self.inner);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            if let Some(inner) = weak.upgrade() {
+                let desktop = Desktop { inner };
+                let _presentation = desktop
+                    .inner
+                    .presentation
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let pending = desktop
+                    .inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .main_motion
+                    .as_ref()
+                    .is_some_and(|motion| motion.id == id);
+                if pending {
+                    let _ = desktop.finish_main_motion(&json!({"id":id}), true);
+                    let _ = desktop.inner.actions.send(DesktopAction::Error(
+                        "主窗口转场超时，已恢复普通显示".into(),
+                    ));
+                }
+            }
+        });
+        Ok(true)
+    }
+
+    fn set_main_frame(window: &WebviewWindow, frame: MainFrame) -> Result<(), String> {
+        let handle = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        window
+            .run_on_main_thread(move || {
+                use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::*};
+                let result = unsafe {
+                    SetWindowPos(
+                        HWND(handle as *mut std::ffi::c_void),
+                        None,
+                        frame.x,
+                        frame.y,
+                        frame.width as i32,
+                        frame.height as i32,
+                        SWP_NOZORDER | SWP_NOACTIVATE,
+                    )
+                }
+                .map_err(|e| e.to_string());
+                let _ = sender.send(result);
+            })
+            .map_err(|e| e.to_string())?;
+        receiver
+            .recv_timeout(Duration::from_secs(2))
+            .map_err(|e| e.to_string())?
+    }
+
+    fn main_motion_prepared(&self, payload: &Value) -> Result<(), String> {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or("缺少转场编号")?;
+        {
+            let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(motion) = &mut state.main_motion else {
+                return Ok(());
+            };
+            if motion.id != id || motion.prepared {
+                return Ok(());
+            }
+            motion.prepared = true;
+        }
+        let result = (|| {
+            let window = self.window("main")?;
+            self.inner
+                .native
+                .send(native::NativeCommand::MainTransition(true));
+            self.inner
+                .native
+                .send(native::NativeCommand::HoldForMain(false));
+            window.show().map_err(|e| e.to_string())?;
+            window.set_focus().map_err(|e| e.to_string())?;
+            window
+                .emit("desktop://main-motion", json!({"phase":"start","id":id}))
+                .map_err(|e| e.to_string())
+        })();
+        if result.is_err() {
+            let _ = self.finish_main_motion(payload, true);
+        }
+        result
+    }
+
+    fn finish_main_motion(&self, payload: &Value, show: bool) -> Result<(), String> {
+        let motion = {
+            let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.main_motion.as_ref().is_none_or(|motion| {
+                payload
+                    .get("id")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|id| id != motion.id)
+            }) {
+                return Ok(());
+            }
+            state.main_motion.take().unwrap()
+        };
+        let result = (|| {
+            let window = self.window("main")?;
+            if !window.is_maximized().unwrap_or(false) {
+                Self::set_main_frame(&window, motion.restore)?;
+            }
+            window
+                .emit(
+                    "desktop://main-motion",
+                    json!({"phase":"settled","id":motion.id}),
+                )
+                .map_err(|e| e.to_string())?;
+            if show {
+                window.show().map_err(|e| e.to_string())?;
+            }
+            Ok(())
+        })();
+        self.inner
+            .native
+            .send(native::NativeCommand::MainTransition(false));
+        self.inner
+            .native
+            .send(native::NativeCommand::HoldForMain(false));
+        result
     }
 
     fn open_quick(&self) -> Result<(), String> {
@@ -445,6 +760,13 @@ impl Desktop {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = emit_window.emit("desktop://prepare-close", json!({"window":label}));
+            } else if label == "main" && matches!(event, tauri::WindowEvent::Resized(_)) {
+                let _ = emit_window.emit(
+                    "desktop://main-window-state",
+                    json!({
+                        "maximized":emit_window.is_maximized().unwrap_or(false)
+                    }),
+                );
             }
         });
     }
@@ -468,9 +790,16 @@ impl Desktop {
                     state.main_ready = true;
                     state.navigation.clone()
                 };
-                window
+                let result = window
                     .emit("desktop://navigate", navigation)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(|e| e.to_string());
+                if let Err(error) = result {
+                    self.inner
+                        .native
+                        .send(native::NativeCommand::HoldForMain(false));
+                    return Err(error);
+                }
+                return self.present_main(&window);
             }
             _ => return Err("未知窗口".into()),
         }
@@ -528,10 +857,16 @@ impl Desktop {
     }
 
     fn close_main(&self) -> Result<(), String> {
+        self.inner
+            .native
+            .send(native::NativeCommand::HoldForMain(false));
         let Some(window) = self.inner.app.get_webview_window("main") else {
             return Ok(());
         };
         window.hide().map_err(|e| e.to_string())?;
+        if let Err(error) = self.finish_main_motion(&Value::Null, false) {
+            let _ = self.inner.actions.send(DesktopAction::Error(error));
+        }
         let generation = {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             state.main_generation += 1;
@@ -583,6 +918,8 @@ impl Desktop {
                     let _ = window.destroy();
                     if label == "quick" {
                         inner.native.send(native::NativeCommand::InputActive(false));
+                    } else {
+                        inner.native.send(native::NativeCommand::HoldForMain(false));
                     }
                     let _ = inner.actions.send(DesktopAction::Error(format!(
                         "{label} 界面加载失败，原生入口仍可使用"
@@ -728,7 +1065,17 @@ impl Desktop {
             .on_menu_event(move |_,event| {
                 if let Some(inner)=weak.upgrade(){
                     let id=event.id.as_ref();
-                    if id=="reminders"{let desktop=Desktop{inner};let _=desktop.action("showReminders",Value::Null);return;}
+                    if id=="reminders"{
+                        let desktop=Desktop{inner};
+                        // The UI thread must not wait for the presentation gate:
+                        // its owner may be waiting for this thread to move a window.
+                        tauri::async_runtime::spawn_blocking(move || {
+                            if let Err(error)=desktop.action("showReminders",Value::Null) {
+                                let _=desktop.inner.actions.send(DesktopAction::Error(error));
+                            }
+                        });
+                        return;
+                    }
                     if ["floating","quiet","mcp"].contains(&id){
                         let state=inner.state.lock().unwrap_or_else(|e|e.into_inner());
                         if let Some(snapshot)=&state.snapshot{let patch=match id{
@@ -740,9 +1087,9 @@ impl Desktop {
                     }
                 }
                 let action=match event.id.as_ref() {
-                "open"=>DesktopAction::Navigate{view:"today".into(),task_id:None},
+                "open"=>DesktopAction::Navigate{view:"today".into(),task_id:None,from_bar:false},
                 "quick"=>DesktopAction::OpenQuick,
-                "review"=>DesktopAction::Navigate{view:"agent-review".into(),task_id:None},
+                "review"=>DesktopAction::Navigate{view:"agent-review".into(),task_id:None,from_bar:false},
                 "quit"=>DesktopAction::Quit,_=>return};let _=actions.send(action);})
             .on_tray_icon_event(move |_,event| {if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}) {
                 let _=clicks.send(DesktopAction::OpenQuick);
@@ -762,17 +1109,29 @@ impl Desktop {
     }
 
     pub fn shutdown(&self) {
+        let _presentation = self
+            .inner
+            .presentation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let shortcut = {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             state.stopped = true;
             state.main_generation += 1;
             state.quick_generation += 1;
+            state.main_motion = None;
             state.registered_shortcut.take()
         };
         if let Some(shortcut) = shortcut {
             let _ = self.inner.app.global_shortcut().unregister(shortcut);
         }
         self.inner.app.remove_tray_by_id("ditalist-tray");
+        self.inner
+            .native
+            .send(native::NativeCommand::MainTransition(false));
+        self.inner
+            .native
+            .send(native::NativeCommand::HoldForMain(false));
         self.inner.native.send(native::NativeCommand::Shutdown);
     }
 }
