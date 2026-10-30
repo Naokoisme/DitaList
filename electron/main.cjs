@@ -20,7 +20,10 @@ const { randomUUID } = require("node:crypto");
 const { McpServer, createMcpHandler } = require("@modelcontextprotocol/server");
 const { z } = require("zod");
 
-const applicationId = "Naoko.DitaList";
+// Keep development Electron shortcuts out of the installed app's taskbar group.
+const applicationId = process.defaultApp
+  ? "Naoko.DitaList.Development"
+  : "Naoko.DitaList";
 app.setName("DitaList");
 app.setAppUserModelId(applicationId);
 protocol.registerSchemesAsPrivileged([
@@ -1018,7 +1021,10 @@ function desktopShortcutPath() {
   const override = process.env.DIDA_LOCAL_DESKTOP_DIR;
   const desktop =
     override && path.isAbsolute(override) ? override : app.getPath("desktop");
-  return path.join(desktop, "DitaList.lnk");
+  return path.join(
+    desktop,
+    process.defaultApp ? "DitaList 开发版.lnk" : "DitaList.lnk",
+  );
 }
 
 function desktopShortcutDetails() {
