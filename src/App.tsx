@@ -1,12 +1,10 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 import {
   Archive,
   ArrowDownAZ,
@@ -14,24 +12,18 @@ import {
   Bot,
   CalendarDays,
   CalendarRange,
-  CalendarCheck2,
   Check,
   CheckCheck,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  CircleHelp,
   Clock3,
   Copy,
   Download,
   Flag,
   Folder,
-  FolderPlus,
   Hash,
   Inbox,
-  LayoutGrid,
   List,
-  ListFilter,
   Menu,
   Minus,
   Monitor,
@@ -77,8 +69,21 @@ import {
   validateData,
 } from "./core/domain";
 import { exportData, loadData, saveData } from "./core/storage";
-import { moveTaskList, type ListMoveTarget } from "./core/list-organization";
+import type { ListMoveTarget } from "./core/list-organization";
+import { applyNavigationSettings, moveSidebarList } from "./core/navigation-actions";
+import {
+  createTaskViewFilter,
+  describeTaskViewFilter,
+  hasTaskViewFilter,
+  matchesTaskViewFilter,
+  type TaskViewFilter,
+} from "./core/task-filter";
 import CalendarView from "./components/CalendarView";
+import AppNavigation from "./components/AppNavigation";
+import NavigationEditor from "./components/NavigationEditor";
+import TaskFilterControl from "./components/TaskFilterControl";
+import AnchoredPopover from "./components/AnchoredPopover";
+import CustomDateInput from "./components/CustomDateInput";
 import TaskDateHint from "./components/TaskDateHint";
 import { FocusView, HabitsView, MatrixView } from "./components/Tools";
 import "./calendar.css";
@@ -136,7 +141,6 @@ const colors = [
   "#81909d",
 ];
 const stamp = () => new Date().toISOString();
-const TargetIcon = Clock3;
 
 function shortcutLabel(shortcut: string) {
   return shortcut
@@ -281,7 +285,8 @@ export default function App() {
   const [sort, setSort] = useState<"manual" | "priority" | "date" | "title">(
     "manual",
   );
-  const [completedOpen, setCompletedOpen] = useState(false);
+  const [navigationEditorOpen, setNavigationEditorOpen] = useState(false);
+  const [taskFilters, setTaskFilters] = useState<Partial<Record<ViewId, TaskViewFilter>>>({});
   const [helpOpen, setHelpOpen] = useState(false);
   const [agentReviewOpen, setAgentReviewOpen] = useState(false);
   const [dragOverNav, setDragOverNav] = useState<string | null>(null);
@@ -485,6 +490,7 @@ export default function App() {
   }, [searchOpen, selectedId, view]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") {
         setCreateDialog(null);
         setDateTask(null);
@@ -497,6 +503,7 @@ export default function App() {
         setCalendarBacklogOpen(false);
         setHelpOpen(false);
         setSidebarOpen(false);
+        setNavigationEditorOpen(false);
         return;
       }
       if (e.ctrlKey || e.metaKey) {
@@ -611,6 +618,21 @@ export default function App() {
         ? data?.filters.find((f) => f.id === view.slice(7))?.name || "过滤器"
         : labels[view] || "任务";
   const currentListId = view.startsWith("list:") ? view.slice(5) : "inbox";
+  const taskFilter = useMemo(() => {
+    const value = taskFilters[view] || createTaskViewFilter(Boolean(data?.settings.showCompleted));
+    return view === "completed" ? { ...value, status: "completed" as const } : value;
+  }, [taskFilters, view, data?.settings.showCompleted]);
+  const filterActive = hasTaskViewFilter(
+    view === "completed"
+      ? { ...taskFilter, status: createTaskViewFilter(Boolean(data?.settings.showCompleted)).status }
+      : taskFilter,
+    Boolean(data?.settings.showCompleted),
+  );
+  const clearTaskFilter = () => setTaskFilters((current) => {
+    const next = { ...current };
+    delete next[view];
+    return next;
+  });
   const visibleTasks = useMemo(() => {
     if (!data) return [];
     let tasks = data.tasks.filter((t) =>
@@ -633,6 +655,7 @@ export default function App() {
           data.filters.find((f) => f.id === view.slice(7))?.query || "",
         ),
       );
+    if (view !== "trash") tasks = tasks.filter((task) => matchesTaskViewFilter(task, taskFilter));
     return tasks.sort(
       (a, b) =>
         Number(b.pinned) - Number(a.pinned) ||
@@ -645,23 +668,26 @@ export default function App() {
               : a.sortOrder - b.sortOrder) ||
         a.createdAt.localeCompare(b.createdAt),
     );
-  }, [data, view, sort]);
+  }, [data, view, sort, taskFilter]);
   const openTasks = visibleTasks.filter(
     (t) => !t.completedAt || view === "trash",
   );
   const doneTasks = visibleTasks.filter((t) => !!t.completedAt);
+  const showOnlyCompleted = view !== "trash" &&
+    (view === "completed" || taskFilter.status === "completed" || taskFilter.dateField === "completed");
   const groups = useMemo(() => {
-    const tasks = view === "completed" ? doneTasks : openTasks;
-    if (!["today", "next7", "all", "completed"].includes(view))
+    const tasks = showOnlyCompleted ? doneTasks : openTasks;
+    if (!tasks.length) return [];
+    if (!["today", "next7", "all", "completed"].includes(view) && taskFilter.dateField !== "completed")
       return [{ label: "", tasks }];
     const result = new Map<string, Task[]>();
     for (const t of tasks) {
       const label =
-        view === "completed"
+        view === "completed" || taskFilter.dateField === "completed"
           ? t.completedAt
             ? dateText(localDate(new Date(t.completedAt)))
             : "已完成"
-          : t.dueDate && t.dueDate < localDate()
+          : !showOnlyCompleted && t.dueDate && t.dueDate < localDate()
             ? "已过期"
             : t.dueDate
               ? dateText(t.dueDate)
@@ -669,9 +695,8 @@ export default function App() {
       if (!result.has(label)) result.set(label, []);
       result.get(label)!.push(t);
     }
-    if (!result.size) result.set(view === "today" ? "今天" : "", []);
     return Array.from(result, ([label, tasks]) => ({ label, tasks }));
-  }, [openTasks, doneTasks, view]);
+  }, [openTasks, doneTasks, view, showOnlyCompleted, taskFilter.dateField]);
 
   function addTaskFromInput(
     text: string,
@@ -892,9 +917,6 @@ export default function App() {
     }
   };
 
-  const orderedLists = data.lists
-    .filter((list) => list.id !== "inbox" && !list.archived)
-    .sort((a, b) => a.sortOrder - b.sortOrder);
   const hasDropHintTask = !draggingListId && Boolean(draggingTaskId || selectedId);
 
   const handleListDrop = (e: React.DragEvent, target: ListMoveTarget) => {
@@ -906,9 +928,9 @@ export default function App() {
     if (!listId || listId !== draggingListId) return;
     const current = latestData.current;
     if (!current) return;
-    const next = moveTaskList(current, listId, target);
+    const next = moveSidebarList(current, listId, target);
     if (next === current) return;
-    update((state) => moveTaskList(state, listId, target));
+    update((state) => moveSidebarList(state, listId, target));
     const moved = next.lists.find((list) => list.id === listId)!;
     const previous = current.lists.find((list) => list.id === listId)!;
     if (moved.folderId === previous.folderId) {
@@ -1154,248 +1176,34 @@ export default function App() {
         if (context) setContext(null);
       }}
     >
-      <nav className="icon-rail" aria-label="主导航">
-        <button
-          className="local-avatar"
-          aria-label="设置"
-          title="DitaList · 设置"
-          onClick={() => setSettingsSection("general")}
-        >
-          <img src="./icon.svg" alt="" />
-        </button>
-        <div className="rail-primary">
-          {(
-            [
-              { id: "today", icon: SquareCheck, label: "任务" },
-              { id: "calendar", icon: CalendarDays, label: "日历" },
-              { id: "matrix", icon: LayoutGrid, label: "四象限" },
-              { id: "focus", icon: TargetIcon, label: "专注" },
-              { id: "habits", icon: CalendarCheck2, label: "习惯" },
-            ] as { id: ViewId; icon: LucideIcon; label: string }[]
-          ).map(({ id, icon: Icon, label }) => (
-            <button
-              key={id}
-              title={label}
-              aria-label={label}
-              className={`rail-button ${view === id || (id === "today" && !["calendar", "matrix", "focus", "habits"].includes(view)) ? "active" : ""}`}
-              onClick={() => go(id)}
-            >
-              <Icon size={21} />
-            </button>
-          ))}
-          <button
-            className="rail-button"
-            title="搜索 Ctrl+K"
-            aria-label="搜索"
-            onClick={() => setSearchOpen(true)}
-          >
-            <Search size={22} />
-          </button>
-          <button
-            className="rail-button mobile-settings"
-            title="设置"
-            aria-label="设置"
-            onClick={() => setSettingsSection("general")}
-          >
-            <Settings2 size={20} />
-          </button>
-        </div>
-        <div className="rail-bottom">
-          <button
-            className={`rail-button save-indicator ${saveStatus}`}
-            title={`${saveStatusLabels[saveStatus]}，查看数据与备份`}
-            aria-label={`${saveStatusLabels[saveStatus]}，查看数据与备份`}
-            onClick={() => setSettingsSection("data")}
-          >
-            <ShieldCheck size={20} />
-          </button>
-          <button
-            className="rail-button"
-            title="设置"
-            aria-label="设置"
-            onClick={() => setSettingsSection("general")}
-          >
-            <Settings2 size={20} />
-          </button>
-          <button
-            className="rail-button"
-            title="快捷键与帮助"
-            aria-label="快捷键与帮助"
-            onClick={() => setHelpOpen(true)}
-          >
-            <CircleHelp size={20} />
-          </button>
-        </div>
-      </nav>
+      <AppNavigation
+        data={data}
+        view={view}
+        active={active}
+        tags={tags}
+        saveStatus={saveStatus}
+        saveStatusLabel={saveStatusLabels[saveStatus]}
+        sidebarOpen={sidebarOpen}
+        draggingListId={draggingListId}
+        listDropTarget={listDropTarget}
+        onGo={go}
+        onSettings={setSettingsSection}
+        onSearch={() => setSearchOpen(true)}
+        onHelp={() => setHelpOpen(true)}
+        onEditNavigation={() => setNavigationEditorOpen(true)}
+        onCloseSidebar={() => setSidebarOpen(false)}
+        onAddList={() => setListDialog("list")}
+        onAddFolder={() => setListDialog("folder")}
+        onAddTag={() => setTagDialog({ mode: "create", name: "" })}
+        onAddFilter={() => setFilterDialog(true)}
+        renderSidebarItem={sidebarItem}
+        renderListItem={listItem}
+        renderTagItem={tagItem}
+        listGroupDropProps={listGroupDropProps}
+      />
       {info?.kind === "desktop" && (
         <div className="window-drag-bar" aria-hidden="true" />
       )}
-      {!["calendar", "matrix", "focus", "habits"].includes(view) && (
-        <>
-          <aside
-            className={`app-sidebar ${sidebarOpen ? "mobile-open" : ""}`}
-            aria-label="任务分类"
-          >
-            <div className="smart-lists">
-              {sidebarItem(
-                "today",
-                "今天",
-                CalendarDays,
-                active.filter((t) => t.dueDate === localDate()).length,
-              )}
-              {sidebarItem(
-                "next7",
-                "最近7天",
-                CalendarRange,
-                active.filter(
-                  (t) =>
-                    t.dueDate &&
-                    t.dueDate >= localDate() &&
-                    t.dueDate <= addDays(localDate(), 6),
-                ).length,
-              )}
-              {sidebarItem(
-                "inbox",
-                "收集箱",
-                Inbox,
-                active.filter((t) => t.listId === "inbox").length,
-              )}
-              {sidebarItem("all", "所有任务", List, active.length)}
-            </div>
-            <div className="sidebar-divider" />
-            <div className="sidebar-scroll">
-              <div
-                className={`sidebar-section-heading list-root-heading ${listDropTarget?.kind === "group" && listDropTarget.folderId === null ? "list-group-drag-over" : ""}`}
-                {...listGroupDropProps(null)}
-              >
-                <span>{draggingListId ? "清单 · 不分组" : "清单"}</span>
-                <div>
-                  <button
-                    title="新建清单分组"
-                    aria-label="新建清单分组"
-                    onClick={() => setListDialog("folder")}
-                  >
-                    <FolderPlus size={14} />
-                  </button>
-                  <button
-                    title="添加清单"
-                    aria-label="添加清单"
-                    onClick={() => setListDialog("list")}
-                  >
-                    <Plus size={15} />
-                  </button>
-                </div>
-              </div>
-              {orderedLists
-                .filter((l) => !l.folderId)
-                .map(listItem)}
-              {data.folders.map((f) => (
-                <details className="sidebar-folder" key={f.id} open>
-                  <summary
-                    className={`${draggingListId ? "list-group-drop-candidate" : ""} ${listDropTarget?.kind === "group" && listDropTarget.folderId === f.id ? "list-group-drag-over" : ""}`}
-                    title="可将清单拖到这里归入分组"
-                    {...listGroupDropProps(f.id)}
-                  >
-                    <ChevronRight size={12} />
-                    <Folder size={16} />
-                    <span>{f.name}</span>
-                    {listDropTarget?.kind === "group" && listDropTarget.folderId === f.id &&
-                      <small>移入</small>}
-                  </summary>
-                  {orderedLists
-                    .filter((l) => l.folderId === f.id)
-                    .map(listItem)}
-                </details>
-              ))}
-              {draggingListId && (
-                <div
-                  className={`list-root-drop ${listDropTarget?.kind === "group" && listDropTarget.folderId === null ? "list-group-drag-over" : ""}`}
-                  {...listGroupDropProps(null)}
-                >
-                  放到清单顶层（不分组）
-                </div>
-              )}
-              {data.lists.filter((l) => l.id !== "inbox" && !l.archived)
-                .length === 0 && (
-                <button
-                  className="sidebar-empty-add"
-                  onClick={() => setListDialog("list")}
-                >
-                  <Plus size={13} />
-                  添加你的第一个清单
-                </button>
-              )}
-              <div className="sidebar-section-heading tag-heading">
-                <span>标签</span>
-                <button
-                  title="添加标签"
-                  aria-label="新建标签"
-                  onClick={() => setTagDialog({ mode: "create", name: "" })}
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-              {tags.map(tagItem)}
-              {!tags.length && (
-                <button
-                  className="sidebar-empty-add"
-                  onClick={() => setTagDialog({ mode: "create", name: "" })}
-                >
-                  <Plus size={13} />
-                  添加你的第一个标签
-                </button>
-              )}
-              <div className="sidebar-section-heading">
-                <span>过滤器</span>
-                <button
-                  title="添加过滤器"
-                  aria-label="添加过滤器"
-                  onClick={() => setFilterDialog(true)}
-                >
-                  <Plus size={14} />
-                </button>
-              </div>
-              {data.filters.map((f) =>
-                sidebarItem(`filter:${f.id}`, f.name, ListFilter),
-              )}
-              {!data.filters.length && (
-                <p className="sidebar-hint">
-                  按日期、优先级和标签，
-                  <br />
-                  快速找到你关心的任务。
-                </p>
-              )}
-            </div>
-            <div className="sidebar-lower">
-              <div className="sidebar-divider" />
-              {sidebarItem("completed", "已完成", SquareCheck)}
-              {sidebarItem(
-                "trash",
-                "垃圾桶",
-                Trash2,
-                data.tasks.filter((t) => t.deletedAt).length,
-              )}
-              <div className="sidebar-local-note">
-                <span
-                  className={`status-dot ${saveStatus === "error" ? "error" : ""}`}
-                />
-                {saveStatus === "saved"
-                  ? "仅本机 · 已保存"
-                  : saveStatus === "saving"
-                    ? "正在保存…"
-                    : "保存失败，请检查"}
-              </div>
-            </div>
-          </aside>
-          {sidebarOpen && (
-            <div
-              className="sidebar-scrim"
-              onClick={() => setSidebarOpen(false)}
-            />
-          )}
-        </>
-      )}
-
       <main
         className={`main-content ${["calendar", "matrix", "focus", "habits"].includes(view) ? "full-view" : ""}`}
       >
@@ -1530,24 +1338,23 @@ export default function App() {
                   ]}
                   onChange={(val) => setSort(val as typeof sort)}
                 />
-                <IconButton
-                  label={
-                    data.settings.showCompleted ? "隐藏已完成" : "显示已完成"
-                  }
-                  onClick={() =>
-                    update((s) => ({
-                      ...s,
-                      settings: {
-                        ...s.settings,
-                        showCompleted: !s.settings.showCompleted,
-                      },
-                    }))
-                  }
-                >
-                  <MoreHorizontal size={21} />
-                </IconButton>
+                {view !== "trash" && (
+                  <TaskFilterControl
+                    key={view}
+                    value={taskFilter}
+                    defaultShowCompleted={data.settings.showCompleted}
+                    completedOnly={view === "completed"}
+                    onChange={(value) => setTaskFilters((current) => ({ ...current, [view]: value }))}
+                  />
+                )}
               </div>
             </header>
+            {view !== "trash" && filterActive && (
+              <div className="task-filter-summary">
+                <span>{describeTaskViewFilter(taskFilter)}</span>
+                <button type="button" onClick={clearTaskFilter}>清除筛选</button>
+              </div>
+            )}
             {!["trash", "completed"].includes(view) && (
               <form
                 className="quick-add"
@@ -1580,7 +1387,7 @@ export default function App() {
                     >
                       <h2>{group.label}</h2>
                       <span>{group.tasks.length}</span>
-                      {view !== "completed" && (
+                      {!showOnlyCompleted && (
                         <IconButton
                           label={`在${group.label}添加任务`}
                           onClick={() =>
@@ -1645,7 +1452,7 @@ export default function App() {
                   ))}
                 </section>
               ))}
-              {!openTasks.length &&
+              {!visibleTasks.length &&
                 view !== "completed" &&
                 view !== "trash" && (
                   <div className="list-empty">
@@ -1654,17 +1461,26 @@ export default function App() {
                       <span />
                     </div>
                     <h2>
-                      {view === "today"
+                      {filterActive
+                        ? "没有符合筛选条件的任务"
+                        : view === "today"
                         ? "今天，轻松一点"
                         : view === "inbox"
                           ? "把想做的事收集在这里"
                           : "暂时没有任务"}
                     </h2>
                     <p>
-                      {view === "today"
+                      {filterActive
+                        ? "试试调整日期范围或完成状态。"
+                        : view === "today"
                         ? "安排好每一件小事，留一点时间给自己。"
                         : "在上方添加任务，或者点击 + 开始。"}
                     </p>
+                    {filterActive && (
+                      <button type="button" className="text-button" onClick={clearTaskFilter}>
+                        清除筛选
+                      </button>
+                    )}
                   </div>
                 )}
               {view === "trash" &&
@@ -1700,27 +1516,22 @@ export default function App() {
               {view === "completed" && !doneTasks.length && (
                 <div className="list-empty">
                   <SquareCheck size={46} strokeWidth={1.1} />
-                  <h2>每一步都值得记录</h2>
-                  <p>已完成的任务会保留在这里。</p>
+                  <h2>{filterActive ? "没有符合筛选条件的任务" : "每一步都值得记录"}</h2>
+                  <p>{filterActive ? "试试调整日期范围。" : "已完成的任务会保留在这里。"}</p>
+                  {filterActive && (
+                    <button type="button" className="text-button" onClick={clearTaskFilter}>清除筛选</button>
+                  )}
                 </div>
               )}
               {!["completed", "trash"].includes(view) &&
+                !showOnlyCompleted &&
                 doneTasks.length > 0 && (
                   <div className="completed-section">
-                    <button
-                      className="completed-heading"
-                      onClick={() => setCompletedOpen((v) => !v)}
-                    >
-                      {completedOpen || data.settings.showCompleted ? (
-                        <ChevronDown size={13} />
-                      ) : (
-                        <ChevronRight size={13} />
-                      )}
+                    <div className="completed-heading">
                       <span>已完成</span>
                       <small>{doneTasks.length}</small>
-                    </button>
-                    {(completedOpen || data.settings.showCompleted) &&
-                      doneTasks.map((t) => (
+                    </div>
+                    {doneTasks.map((t) => (
                         <TaskRow
                           key={t.id}
                           task={t}
@@ -1916,12 +1727,16 @@ export default function App() {
               }));
               go(`list:${id}`);
             } else
-              update((s) => ({
-                ...s,
-                lists: s.lists.map((l) =>
-                  l.id === listDialog.id ? { ...l, name, color, folderId } : l,
-                ),
-              }));
+              update((s) => {
+                const placed = s.lists.find((list) => list.id === listDialog.id)?.folderId === folderId ? s :
+                  moveSidebarList(s, listDialog.id, { kind: "group", folderId });
+                return {
+                  ...placed,
+                  lists: placed.lists.map((l) =>
+                    l.id === listDialog.id ? { ...l, name, color } : l,
+                  ),
+                };
+              });
             setListDialog(null);
           }}
           onArchive={
@@ -1939,6 +1754,31 @@ export default function App() {
                 }
               : undefined
           }
+        />
+      )}
+      {navigationEditorOpen && (
+        <NavigationEditor
+          data={data}
+          onClose={() => setNavigationEditorOpen(false)}
+          onSave={(preferences, renames) => {
+            const current = latestData.current;
+            if (!current) return;
+            const next = applyNavigationSettings(current, preferences, renames);
+            setData(next);
+            setTaskFilters((filters) => Object.fromEntries(
+              Object.entries(filters).map(([key, value]) => [
+                key.startsWith("tag:") && renames[key]
+                  ? `tag:${renames[key].trim().replace(/^#+/, "").trim()}` : key,
+                value,
+              ]),
+            ));
+            if (view.startsWith("tag:") && renames[view]) {
+              const renamedView = `tag:${renames[view].trim().replace(/^#+/, "").trim()}` as ViewId;
+              go(renamedView);
+            }
+            setNavigationEditorOpen(false);
+            setToast("已保存导航布局");
+          }}
         />
       )}
       {tagDialog && (
@@ -1964,35 +1804,24 @@ export default function App() {
               setToast(`已添加标签 #${cleanName}`);
             } else {
               const oldName = tagDialog.name;
-              const now = stamp();
-              update((s) => ({
-                ...s,
-                settings: {
-                  ...s.settings,
-                  customTags: Array.from(
-                    new Set(
-                      (s.settings.customTags || []).map((t) =>
-                        t === oldName ? cleanName : t,
-                      ),
-                    ),
-                  ),
-                },
-                tasks: s.tasks.map((task) =>
-                  task.tags.includes(oldName)
-                    ? {
-                        ...task,
-                        tags: Array.from(
-                          new Set(
-                            task.tags.map((t) =>
-                              t === oldName ? cleanName : t,
-                            ),
-                          ),
-                        ),
-                        updatedAt: now,
-                      }
-                    : task,
-                ),
-              }));
+              const current = latestData.current;
+              if (!current) return;
+              try {
+                setData(applyNavigationSettings(
+                  current,
+                  current.settings.navigation || { orders: {}, hidden: [] },
+                  { [`tag:${oldName}`]: cleanName },
+                ));
+              } catch (error) {
+                setToast(error instanceof Error ? error.message : String(error));
+                return;
+              }
+              setTaskFilters((filters) => {
+                const next = { ...filters };
+                if (next[`tag:${oldName}`]) next[`tag:${cleanName}`] = next[`tag:${oldName}`];
+                if (oldName !== cleanName) delete next[`tag:${oldName}`];
+                return next;
+              });
               setTagDialog(null);
               if (view === `tag:${oldName}`) go(`tag:${cleanName}`);
               setToast(`已将标签重命名为 #${cleanName}`);
@@ -2078,15 +1907,19 @@ export default function App() {
                         const list = data.lists.find(
                           (l) => l.id === t.listId && !l.archived,
                         );
-                        go(
-                          t.completedAt
+                        const targetView: ViewId = t.completedAt
                             ? "completed"
                             : t.listId === "inbox"
                               ? "inbox"
                               : list
                                 ? `list:${list.id}`
-                                : "all",
-                        );
+                                : "all";
+                        setTaskFilters((filters) => {
+                          const next = { ...filters };
+                          delete next[targetView];
+                          return next;
+                        });
+                        go(targetView);
                         searchTargetId.current = t.id;
                         setSearchOpen(false);
                         setSelectedId(t.id);
@@ -2855,142 +2688,6 @@ export interface SelectOption<T extends string | number = string> {
   color?: string;
 }
 
-function AnchoredPopover({
-  anchorRef,
-  onClose,
-  className,
-  children,
-  role,
-  ariaLabel,
-  alignRight = false,
-  preferAbove = false,
-  maxHeight = 360,
-}: {
-  anchorRef: React.RefObject<HTMLElement | null>;
-  onClose: () => void;
-  className: string;
-  children: React.ReactNode;
-  role?: React.AriaRole;
-  ariaLabel?: string;
-  alignRight?: boolean;
-  preferAbove?: boolean;
-  maxHeight?: number;
-}) {
-  const popoverRef = useRef<HTMLDivElement>(null);
-  const [position, setPosition] = useState<{
-    top: number;
-    left: number;
-    maxHeight: number;
-  } | null>(null);
-
-  useLayoutEffect(() => {
-    const anchor = anchorRef.current;
-    const popover = popoverRef.current;
-    if (!anchor || !popover) return;
-    const reposition = () => {
-      const bounds = anchor.getBoundingClientRect();
-      const viewportWidth = document.documentElement.clientWidth;
-      const viewportHeight = document.documentElement.clientHeight;
-      const margin = 12;
-      const gap = 6;
-      const above = Math.max(0, bounds.top - margin - gap);
-      const below = Math.max(0, viewportHeight - bounds.bottom - margin - gap);
-      const contentHeight =
-        popover.scrollHeight + popover.offsetHeight - popover.clientHeight;
-      const desiredHeight = Math.min(maxHeight, contentHeight);
-      const useAbove = preferAbove
-        ? above >= desiredHeight || above > below
-        : below < desiredHeight && above > below;
-      const availableHeight = Math.min(maxHeight, useAbove ? above : below);
-      const height = Math.min(contentHeight, availableHeight);
-      const width = popover.getBoundingClientRect().width;
-      const next = {
-        top: Math.max(
-          margin,
-          Math.min(
-            useAbove ? bounds.top - gap - height : bounds.bottom + gap,
-            viewportHeight - margin - height,
-          ),
-        ),
-        left: Math.max(
-          margin,
-          Math.min(
-            alignRight ? bounds.right - width : bounds.left,
-            viewportWidth - margin - width,
-          ),
-        ),
-        maxHeight: availableHeight,
-      };
-      setPosition((previous) =>
-        previous &&
-        previous.top === next.top &&
-        previous.left === next.left &&
-        previous.maxHeight === next.maxHeight
-          ? previous
-          : next,
-      );
-    };
-    reposition();
-    const observer = new ResizeObserver(reposition);
-    observer.observe(anchor);
-    observer.observe(popover);
-    window.addEventListener("resize", reposition);
-    // Capture also observes scrolling inside a task dialog or details panel.
-    window.addEventListener("scroll", reposition, true);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
-    };
-  }, [anchorRef, alignRight, preferAbove, maxHeight, children]);
-
-  useEffect(() => {
-    const handlePointer = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (
-        !anchorRef.current?.contains(target) &&
-        !popoverRef.current?.contains(target)
-      ) onClose();
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      // A picker closes first; the task dialog and its draft stay open.
-      onClose();
-      anchorRef.current
-        ?.querySelector<HTMLButtonElement>("button")
-        ?.focus({ preventScroll: true });
-    };
-    document.addEventListener("pointerdown", handlePointer, true);
-    document.addEventListener("keydown", handleKey, true);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer, true);
-      document.removeEventListener("keydown", handleKey, true);
-    };
-  }, [anchorRef, onClose]);
-
-  return createPortal(
-    <div
-      ref={popoverRef}
-      className={`${className} viewport-popover`}
-      role={role}
-      aria-label={ariaLabel}
-      style={{
-        top: position?.top ?? 0,
-        left: position?.left ?? 0,
-        maxHeight: position?.maxHeight ?? maxHeight,
-        visibility: position ? "visible" : "hidden",
-      }}
-      onMouseDown={(event) => event.stopPropagation()}
-      onClick={(event) => event.stopPropagation()}
-    >
-      {children}
-    </div>,
-    document.body,
-  );
-}
-
 export function CustomSelect<T extends string | number>({
   value,
   options,
@@ -3210,143 +2907,6 @@ function TaskDestinationSelect({
               </button>
             </>
           )}
-        </AnchoredPopover>
-      )}
-    </div>
-  );
-}
-
-function CustomDateInput({
-  value,
-  onChange,
-  ariaLabel,
-  placeholder = "选择日期",
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  ariaLabel: string;
-  placeholder?: string;
-}) {
-  const today = localDate();
-  const initial = /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : today;
-  const [open, setOpen] = useState(false);
-  const [viewMonth, setViewMonth] = useState(() => `${initial.slice(0, 7)}-01`);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-      setViewMonth(`${value.slice(0, 7)}-01`);
-    }
-  }, [value]);
-
-  const [y, m] = viewMonth.split("-").map(Number);
-  const firstOfMonth = new Date(y, m - 1, 1, 12);
-  const offset = (firstOfMonth.getDay() + 6) % 7;
-  const startCell = addDays(viewMonth, -offset);
-  const days = Array.from({ length: 42 }, (_, idx) => addDays(startCell, idx));
-  const shiftMonth = (delta: number) => {
-    const d = new Date(y, m - 1 + delta, 1, 12);
-    setViewMonth(localDate(d));
-  };
-
-  return (
-    <div className="custom-picker" ref={wrapperRef}>
-      <input
-        type="text"
-        value={value}
-        aria-label={ariaLabel}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        placeholder={placeholder}
-        onFocus={() => setOpen(true)}
-        onClick={() => setOpen(true)}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      {open && (
-        <AnchoredPopover
-          anchorRef={wrapperRef}
-          className="custom-picker-popover custom-date-popover"
-          role="dialog"
-          ariaLabel={ariaLabel}
-          onClose={() => setOpen(false)}
-        >
-          <div className="custom-date-presets">
-            {[
-              { label: "今天", date: today },
-              { label: "明天", date: addDays(today, 1) },
-              { label: "7天后", date: addDays(today, 7) },
-            ].map((preset) => (
-              <button
-                type="button"
-                key={preset.date}
-                className={value === preset.date ? "is-selected" : ""}
-                onClick={() => {
-                  onChange(preset.date);
-                  setOpen(false);
-                }}
-              >
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <div className="custom-picker-header">
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="上个月"
-              onClick={() => shiftMonth(-1)}
-            >
-              <ChevronLeft size={15} />
-            </button>
-            <strong>
-              {y}年{m}月
-            </strong>
-            <button
-              type="button"
-              className="icon-button"
-              aria-label="下个月"
-              onClick={() => shiftMonth(1)}
-            >
-              <ChevronRight size={15} />
-            </button>
-          </div>
-          <div className="custom-picker-weekdays">
-            {["一", "二", "三", "四", "五", "六", "日"].map((w) => (
-              <span key={w}>{w}</span>
-            ))}
-          </div>
-          <div className="custom-picker-days">
-            {days.map((d) => {
-              const dayNum = Number(d.slice(8, 10));
-              const inMonth = Number(d.slice(5, 7)) === m;
-              const isSelected = d === value;
-              const isToday = d === today;
-              return (
-                <button
-                  type="button"
-                  key={d}
-                  className={`custom-day-cell ${inMonth ? "" : "is-outside"} ${isSelected ? "is-selected" : ""} ${isToday ? "is-today" : ""}`}
-                  onClick={() => {
-                    onChange(d);
-                    setOpen(false);
-                  }}
-                >
-                  {dayNum}
-                </button>
-              );
-            })}
-          </div>
-          <div className="custom-picker-footer">
-            <button
-              type="button"
-              onClick={() => {
-                onChange("");
-                setOpen(false);
-              }}
-            >
-              不设日期
-            </button>
-          </div>
         </AnchoredPopover>
       )}
     </div>
@@ -4265,7 +3825,7 @@ function SettingsDialog({
                 />
               </div>
               <label className="setting-row">
-                <span>显示已完成任务</span>
+                <span>默认显示已完成任务</span>
                 <input
                   type="checkbox"
                   checked={data.settings.showCompleted}

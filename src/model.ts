@@ -86,6 +86,10 @@ export interface FocusSession {
   durationSeconds: number;
   completed: boolean;
 }
+export interface NavigationPreferences {
+  orders: Record<string, string[]>;
+  hidden: string[];
+}
 export interface Settings {
   theme: "light" | "dark" | "system";
   accent: string;
@@ -102,6 +106,7 @@ export interface Settings {
   floatingDefaultListId: string;
   floatingDefaultDate: "none" | "today" | "tomorrow";
   customTags?: string[];
+  navigation?: NavigationPreferences;
 }
 export interface AppData {
   schemaVersion: 1;
