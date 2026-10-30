@@ -267,11 +267,11 @@ textarea::placeholder {
   -webkit-app-region: no-drag;
   pointer-events: none;
 }
-.window-controls button:hover {
+.window-controls button[data-hovered="true"] {
   background: var(--hover);
   color: var(--text);
 }
-.window-controls .close-window:hover {
+.window-controls .close-window[data-hovered="true"] {
   background: #e34c4c;
   color: #fff;
 }

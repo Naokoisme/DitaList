@@ -287,6 +287,7 @@ export default function App() {
     "manual",
   );
   const [navigationEditing, setNavigationEditing] = useState(false);
+  const [windowControlHover, setWindowControlHover] = useState<"minimize" | "maximize" | "close" | null>(null);
   const [taskFilters, setTaskFilters] = useState<Partial<Record<ViewId, TaskViewFilter>>>({});
   const [helpOpen, setHelpOpen] = useState(false);
   const [dragOverNav, setDragOverNav] = useState<string | null>(null);
@@ -367,6 +368,7 @@ export default function App() {
     const report = (error: unknown) => { if (!canceled) setLoadError(errorMessage(error)); };
     void (async () => {
       keep(await watchNavigation((intent) => {
+        setWindowControlHover(null);
         if (intent.view) { setView(intent.view as ViewId); setSelectedId(null); }
         if (intent.taskId) setSelectedId(intent.taskId);
       }));
@@ -393,6 +395,20 @@ export default function App() {
     })().catch(report);
     return () => { canceled = true; cleanups.forEach((cleanup) => cleanup()); };
   }, [boot, acceptSnapshot]);
+  useEffect(() => {
+    // A hidden WebView can retain :hover until its next mouse move. Window
+    // controls use fresh pointer input, never that retained browser hit target.
+    const clearHover = () => setWindowControlHover(null);
+    const visibilityChanged = () => { if (document.hidden) clearHover(); };
+    window.addEventListener("blur", clearHover);
+    window.addEventListener("focus", clearHover);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () => {
+      window.removeEventListener("blur", clearHover);
+      window.removeEventListener("focus", clearHover);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, []);
   useEffect(() => {
     document.body.inert = exitPending;
     return () => { document.body.inert = false; };
@@ -668,6 +684,7 @@ export default function App() {
   }
   async function closeWindow() {
     if (exitRequested.current || !await flushBeforeLeaving()) return;
+    setWindowControlHover(null);
     try { await desktopAction("closeMain"); } catch (error) { setToast(errorMessage(error)); }
   }
   async function prepareExit() {
@@ -1658,14 +1675,18 @@ export default function App() {
         </div>
       )}
       {info?.kind === "desktop" && (
-        <div className="window-controls">
+        <div className="window-controls" onPointerLeave={() => setWindowControlHover(null)}>
           <button
             type="button"
             aria-label="最小化"
             title="最小化"
+            data-hovered={windowControlHover === "minimize"}
+            onPointerMove={() => setWindowControlHover("minimize")}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
+              setWindowControlHover(null);
+              if (event.detail > 0) event.currentTarget.blur();
               void desktopAction("minimize");
             }}
           >
@@ -1675,9 +1696,13 @@ export default function App() {
             type="button"
             aria-label="最大化或还原"
             title="最大化或还原"
+            data-hovered={windowControlHover === "maximize"}
+            onPointerMove={() => setWindowControlHover("maximize")}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
+              setWindowControlHover(null);
+              if (event.detail > 0) event.currentTarget.blur();
               void desktopAction("maximize");
             }}
           >
@@ -1688,9 +1713,13 @@ export default function App() {
             className="close-window"
             aria-label="关闭窗口"
             title="关闭窗口"
+            data-hovered={windowControlHover === "close"}
+            onPointerMove={() => setWindowControlHover("close")}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
+              setWindowControlHover(null);
+              if (event.detail > 0) event.currentTarget.blur();
               void closeWindow();
             }}
           >

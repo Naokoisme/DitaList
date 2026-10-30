@@ -62,7 +62,7 @@
 
 证据位于 `reports/floating-feedback-20261030/`：`native-tests.log`、`floating-grip-tests.log`、`desktop-clippy.log`、`frontend-build.log`、`release-build.log`、`fixed-binary.json`、`source-hashes.json`、`fixed-run.json`、`native-only-processes.json`、`fixed-exit.json`、`fixed-runtime.jsonl`，以及基线运行日志和前端浅／深色截图。上述专项候选只供本地集成验证，不是安装包或已发布版本；专项交付时的共享 `target/release/DitaListRust.exe` 使用临时验证标识，总集成须以正常标识重新构建。
 
-## 贴边细线修正
+## 贴边细线修正（e1e24c6）
 
 用户对 `de3d620` 候选的补充反馈：“我想的是吸附到屏幕边缘变成一条细线”。这次交互为：
 
@@ -78,3 +78,19 @@
 针对性检查：`cargo test --locked -p ditalist-desktop desktop::` 13 项通过，覆盖四边细线、DPI、负坐标显示器、角落、计数增长、极小工作区、原生按钮消息与既有提醒。严格 Clippy 通过。只读复核已核对鼠标捕获、窗口借用重入、定时消息乱序及输入交接；这些检查不替代实际鼠标交互。日志保留在 `reports/edge-autohide-20261030/`。
 
 实际 Tauri 隔离候选使用 `Naoko.DitaList.RustPreview.EdgeAutoHide` 和 `.local/edge-autohide/profile`：15:20 启动，进程树仅含宿主、WebView2 子进程为 0，运行日志成功记录原生栏 `floating` 状态和矩形；随后经自身 `--quit` 正常退出。测试期间已安装实例 PID 11072 始终保留，未覆盖程序或数据；快捷键占用日志来自该实例已有的注册。Computer Use 的 `list_windows`／`list_apps` 未返回隔离原生工具栏，未对用户正在使用的主窗口注入操作。细线显示、鼠标移入／移出、输入拖离及混合 DPI 的实际交互仍待用户覆盖安装验证。
+
+## 白色、圆角与过渡补充
+
+用户试用后要求：细线改白色，收起／展开有动画，完整栏恢复圆角。上一候选为避免移入时的圆角空区，将贴边窗口区域设为矩形，导致用户截图里的直角；本次恢复所有状态的圆角，并把竖线居中放在完整栏直边范围内，兼顾外观与连续命中区域。
+
+- 细线固定 `#ffffff`，不随主题强调色变化；仍为 4 DIP 粗，上下最长 64 DIP，左右 24 DIP，随 DPI 缩放。
+- 完整栏恢复 8 DIP 圆角，细线端部按自身厚度收圆。
+- 收展过渡为 180ms，采用缓出几何变化。中途移回从当前可见位置展开；按钮开始操作前完成展开，避免拖动锚点漂移。
+- 16ms 定时器仅在过渡期间使用，完成、隐藏、输入交接、拖动或显示配置变化后取消，不产生静止动画循环。读取 Windows 的 [界面动画设置](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-systemparametersinfow)；系统关闭动画时直接切换。
+- 动画中的局部矩形不覆盖完整栏缓存；按钮按完整栏位置裁剪显示，提醒和快捷输入仍从完整锚点定位。日志仅记录完成后的可见状态。
+
+另修复主窗口恢复后「×」保留红底的问题：红底来自 CSS `:hover`，现有关闭流程已执行失焦。隐藏的 WebView 可以保留旧悬停命中，因此窗口控制按钮改为由新的指针移动事件更新高亮，关闭／失焦／隐藏／恢复导航时清空。鼠标只释放当前窗口控制按钮的焦点，键盘操作和编辑表单的焦点不作全局清理。
+
+针对性验证：桌面模块 16 项测试、严格 Clippy 通过；新增 3 项生产 React 组件检查通过，覆盖浅深主题、窄窗、残留 `:hover`、无重复关闭、键盘描边及草稿焦点。记录在 `reports/bar-polish-20261030/`；自动化检查不代替真实原生动画观感。
+
+实际主窗口验证：隔离标识 `Naoko.DitaList.RustPreview.BarPolish`，空白隔离数据。通过 Computer Use 点击实际「关闭窗口」，日志在 15:55:58 记录 `closeMain`；15:56:03 经同隔离程序 `--main` 返回 `open_main`，窗口 ID 仍为 29892202，没有销毁重建。恢复截图中「×」无红底，焦点为 WebView 窗格；截图和运行记录保存为 `warm-reopen.png`、`warm-reopen.json`、`runtime.jsonl`。这是实际 Tauri 的暖恢复验证，未直接自动点击原生悬浮栏，也未自动验收原生收展动画。测试实例随后正常退出，安装版 PID 29020 保持运行。

@@ -87,6 +87,61 @@ async function open(entry = "", state = fixture(), clockAt?: number): Promise<Pa
   return page;
 }
 
+for (const theme of ["light", "dark"] as const) {
+  test(`window controls clear stale hover after hiding and reopen (${theme})`, async () => {
+    const state = fixture(); state.data.settings.theme = theme;
+    const page = await open("", state);
+    try {
+      if (theme === "dark") await page.setViewportSize({width: 800, height: 720});
+      const close = page.getByRole("button", {name: "关闭窗口", exact: true});
+      const background = () => close.evaluate((button) => getComputedStyle(button).backgroundColor);
+      await close.hover();
+      assert.equal(await background(), "rgb(227, 76, 76)");
+      await close.click();
+      await page.waitForFunction(() => (window as any).__fixture.actions.some((action: any) => action.action === "closeMain"));
+      // The fixture leaves the DOM at its old pointer coordinates, reproducing
+      // retained :hover independently of the explicit interaction state.
+      assert.equal(await close.evaluate((button) => button.matches(":hover")), true);
+      assert.equal(await background(), "rgba(0, 0, 0, 0)");
+      assert.equal(await close.evaluate((button) => document.activeElement === button), false);
+      await page.evaluate(() => {
+        window.dispatchEvent(new Event("focus"));
+        (window as any).__fixture.emit("desktop://navigate", {view: "today"});
+      });
+      assert.equal(await background(), "rgba(0, 0, 0, 0)");
+      assert.equal(await page.evaluate(() => (window as any).__fixture.actions.filter((action: any) => action.action === "closeMain").length), 1);
+      await page.mouse.move(300, 400);
+      await close.hover();
+      assert.equal(await background(), "rgb(227, 76, 76)");
+      await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      assert.equal(await close.evaluate((button) => button.matches(":hover")), true);
+      assert.equal(await background(), "rgba(0, 0, 0, 0)");
+    } finally { await page.close(); }
+  });
+}
+
+test("window controls preserve keyboard feedback and form focus on return", async () => {
+  const page = await open();
+  try {
+    const maximize = page.getByRole("button", {name: "最大化或还原", exact: true});
+    await maximize.focus();
+    await page.keyboard.press("Enter");
+    assert.equal(await maximize.evaluate((button) => document.activeElement === button && button.matches(":focus-visible")), true);
+    assert.equal(await maximize.evaluate((button) => getComputedStyle(button).outlineStyle), "solid");
+    assert.equal(await page.evaluate(() => (window as any).__fixture.actions.filter((action: any) => action.action === "maximize").length), 1);
+    await page.getByRole("button", {name: "添加任务 Ctrl+N", exact: true}).click();
+    const title = page.getByRole("textbox", {name: "新任务标题", exact: true});
+    await title.fill("尚未保存的标题");
+    await page.evaluate(() => {
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("focus"));
+      (window as any).__fixture.emit("desktop://navigate", {});
+    });
+    assert.equal(await title.inputValue(), "尚未保存的标题");
+    assert.equal(await title.evaluate((input) => document.activeElement === input), true);
+  } finally { await page.close(); }
+});
+
 test("pending Agent changes remain quiet until opened; approval uses the proposal id", async () => {
   const page = await open();
   try {

@@ -1,5 +1,47 @@
 //! Physical-pixel placement; snap distance and edge-handle thickness are in DIP.
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{POINT, RECT};
+
+pub(super) const TRANSITION_DURATION: Duration = Duration::from_millis(180);
+
+pub(super) struct BarTransition {
+    from: RECT,
+    pub(super) target: RECT,
+    started: Instant,
+}
+
+impl BarTransition {
+    pub(super) fn new(from: RECT, started: Instant) -> Self {
+        Self {
+            from,
+            target: from,
+            started,
+        }
+    }
+
+    pub(super) fn frame(&self, now: Instant) -> (RECT, bool) {
+        let elapsed = now.saturating_duration_since(self.started);
+        let progress = (elapsed.as_secs_f32() / TRANSITION_DURATION.as_secs_f32()).min(1.);
+        let eased = 1. - (1. - progress).powi(3);
+        let mix = |start: i32, end: i32| start + ((end - start) as f32 * eased).round() as i32;
+        (
+            RECT {
+                left: mix(self.from.left, self.target.left),
+                top: mix(self.from.top, self.target.top),
+                right: mix(self.from.right, self.target.right),
+                bottom: mix(self.from.bottom, self.target.bottom),
+            },
+            elapsed >= TRANSITION_DURATION,
+        )
+    }
+}
+
+pub(super) fn corner_diameter(width: i32, height: i32, dpi: f32) -> i32 {
+    ((16. * dpi / 96.).round() as i32)
+        .min(width)
+        .min(height)
+        .max(1)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 enum Edge {
@@ -64,7 +106,10 @@ impl Dock {
         let max_length = (64. * dpi / 96.).round() as i32;
         let mut rect = expanded;
         if self.horizontal != Edge::Free {
-            let length = (expanded.bottom - expanded.top)
+            // Keep the handle away from the expanded bar's rounded corners,
+            // so every visible part leads into a hit-testable expanded area.
+            let length = (expanded.bottom - expanded.top - (16. * dpi / 96.).round() as i32)
+                .max(thickness)
                 .min(max_length)
                 .min(work.bottom - work.top);
             rect.top = (rect.top + (expanded.bottom - expanded.top - length) / 2)
@@ -208,8 +253,8 @@ mod tests {
     #[test]
     fn each_edge_collapses_to_a_thin_handle_inside_the_expanded_bar() {
         for (expanded, expected) in [
-            (rect(0, 300, 180, 40), rect(0, 300, 4, 40)),
-            (rect(1740, 300, 180, 40), rect(1916, 300, 4, 40)),
+            (rect(0, 300, 180, 40), rect(0, 308, 4, 24)),
+            (rect(1740, 300, 180, 40), rect(1916, 308, 4, 24)),
             (rect(600, 0, 180, 40), rect(658, 0, 64, 4)),
             (rect(600, 1000, 180, 40), rect(658, 1036, 64, 4)),
         ] {
@@ -232,7 +277,7 @@ mod tests {
         let dock = Dock::after_drag(expanded, work, 192.);
         assert_eq!(
             dock.collapsed_rect(expanded, work, 192.),
-            rect(-2560, -1360, 8, 80)
+            rect(-2560, -1344, 8, 48)
         );
     }
 
@@ -257,5 +302,45 @@ mod tests {
             dock.collapsed_rect(expanded, work, 96.),
             rect(-20, -10, 4, 20)
         );
+    }
+
+    #[test]
+    fn transition_has_exact_endpoints_and_does_not_overshoot() {
+        let start = Instant::now();
+        let full = rect(-180, 300, 180, 40);
+        let line = rect(-4, 308, 4, 24);
+        let mut motion = BarTransition::new(full, start);
+        motion.target = line;
+        assert_eq!(motion.frame(start), (full, false));
+        let (middle, done) = motion.frame(start + Duration::from_millis(90));
+        assert!(!done);
+        assert!(middle.left > full.left && middle.left < line.left);
+        assert_eq!(middle.right, 0);
+        assert!(middle.top >= full.top && middle.bottom <= full.bottom);
+        assert_eq!(motion.frame(start + TRANSITION_DURATION), (line, true));
+        assert_eq!(motion.frame(start + Duration::from_secs(1)), (line, true));
+    }
+
+    #[test]
+    fn reversing_a_transition_starts_from_the_current_visible_rectangle() {
+        let start = Instant::now();
+        let full = rect(600, 0, 180, 40);
+        let line = rect(658, 0, 64, 4);
+        let mut closing = BarTransition::new(full, start);
+        closing.target = line;
+        let now = start + Duration::from_millis(60);
+        let current = closing.frame(now).0;
+        let mut opening = BarTransition::new(current, now);
+        opening.target = full;
+        assert_eq!(opening.frame(now).0, current);
+        assert_eq!(opening.frame(now + TRANSITION_DURATION), (full, true));
+    }
+
+    #[test]
+    fn rounded_regions_scale_but_never_exceed_a_thin_handle() {
+        assert_eq!(corner_diameter(180, 40, 96.), 16);
+        assert_eq!(corner_diameter(360, 80, 192.), 32);
+        assert_eq!(corner_diameter(4, 24, 96.), 4);
+        assert_eq!(corner_diameter(128, 8, 192.), 8);
     }
 }
