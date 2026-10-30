@@ -9,8 +9,8 @@
 | 中文快速输入 | core/quick_input、FloatingApp | 自然语言、上下文标签合并、同号失败重试 | 真实 WebView2 中文输入、Esc 销毁和草稿恢复 |
 | 清单、分组、标签、过滤器 | core/service、navigation、AppNavigation | CRUD、引用清理、排序、互换／冲突 | 见本轮桌面验收记录 |
 | 月／周／日／议程日历及拖放 | Calendar、core TaskUpdate | 实际组件四模式；业务日期校验 | 见本轮桌面验收记录，浏览器模式不计作完整拖放验收 |
-| 四象限 | Matrix、TaskUpdate | 具体任务命令接入，保留生产组件 | 见本轮桌面验收记录 |
-| 习惯 | Tools、HabitRecord | 核心记录及实际组件提交 | 见本轮桌面验收记录 |
+| 四象限 | Matrix、TaskUpdate | 具体任务命令接入，保留生产组件 | 真实深浅主题及任务归属显示已查看；拖动另列未验 |
+| 习惯 | Tools、HabitRecord | 核心记录及实际组件提交 | 真实打卡显示1/2并核对核心JSON保存 |
 | 专注和休息 | core/focus、Tools | 无视图推进、到期竞争、历史只写一次、暂停目标锁定 | 见生命周期记录 |
 | 设置、主题、快捷键、数据状态 | App、desktop | 类型验证、核心设置、真实组件深浅主题 | 设置与 MCP 配置已实测；跨 DPI 见未覆盖项 |
 | JSON／CSV 导入、备份、损坏恢复 | core/import、storage | CSV 幂等、合并不覆盖、兼容包装、损坏保全、版本拒绝 | Windows 实际文件 I/O 集成测试 |

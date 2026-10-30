@@ -46,3 +46,5 @@ cargo build --locked --release -p ditalist-mcp
 MCP 默认关闭，用户在设置开启后复制标准 stdio 配置。见 [MCP 接入](docs/mcp.md)。业务请求号在首次操作时生成，重试保持原号；创建和修改均需本地审核，删除只入回收站。
 
 架构约定见 [架构草案](docs/architecture.md) 和 [接口合同](docs/interfaces.md)。实际验收范围与限制见 [验证报告](docs/validation.md)，不得以编译或浏览器 fixture 通过代替真实桌面验收。
+
+本轮候选位于 `release/20261030-052508-225c8fa2e0ec/`，包含 Portable ZIP、Setup 和 SHA-256 清单。已验证独立目录安装、覆盖与数据保留；手动拖放、原生视觉、多屏/DPI和实际输入法候选态仍待验收。测试安装已经正常卸载，候选与隔离验收数据保留。

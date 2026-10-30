@@ -12,7 +12,9 @@ async fn actual_desktop_core_accepts_standard_stdio() {
     let path =
         std::env::var("DITALIST_LIVE_CONTACT").expect("Set an isolated preview contact path");
     let request_id = format!("live-desktop-{}", uuid::Uuid::new_v4());
-    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_ditalist-mcp"));
+    let binary = std::env::var("DITALIST_LIVE_BRIDGE")
+        .unwrap_or_else(|_| env!("CARGO_BIN_EXE_ditalist-mcp").to_owned());
+    let mut command = tokio::process::Command::new(&binary);
     command.arg("--contact").arg(&path);
     let client = ClientConfig::default()
         .serve(TokioChildProcess::new(command).unwrap())
@@ -52,7 +54,7 @@ async fn actual_desktop_core_accepts_standard_stdio() {
     );
     println!(
         "{}",
-        json!({"requestId":request_id,"receipt":receipt,"sameIdRetry":"same receipt","transport":"official rmcp stdio"})
+        json!({"requestId":request_id,"receipt":receipt,"sameIdRetry":"same receipt","transport":"official rmcp stdio","bridge":binary})
     );
     client.cancel().await.unwrap();
 }
