@@ -1369,7 +1369,7 @@ textarea::placeholder {
 .new-task-dialog,
 .date-dialog,
 .list-dialog {
-  overflow: visible;
+  overflow: auto;
 }
 .new-task-dialog {
   width: 510px;
@@ -1507,6 +1507,21 @@ textarea::placeholder {
   top: auto;
   bottom: calc(100% + 6px);
 }
+.custom-select-popover.viewport-popover,
+.custom-picker-popover.viewport-popover {
+  position: fixed;
+  right: auto;
+  bottom: auto;
+  max-width: calc(100vw - 24px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  z-index: 500;
+}
+.viewport-popover > * {
+  flex-shrink: 0;
+}
 .custom-select-option {
   display: flex;
   align-items: center;
@@ -1547,6 +1562,10 @@ textarea::placeholder {
   min-width: 215px;
   padding: 6px;
 }
+.destination-popover.viewport-popover {
+  width: 256px;
+  min-width: 0;
+}
 .destination-trigger {
   padding: 5px 8px;
   background: var(--panel);
@@ -1558,14 +1577,30 @@ textarea::placeholder {
   white-space: nowrap;
   max-width: 160px;
 }
-.destination-trigger-text small {
-  color: var(--accent);
-  font-size: 11px;
-}
 .destination-group-title {
   font-size: 11px;
   color: var(--muted);
   padding: 5px 9px 3px;
+}
+.destination-hint {
+  color: var(--muted);
+  padding: 2px 9px 8px;
+  font-size: 11px;
+  line-height: 1.65;
+}
+.destination-list-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.destination-list-options .custom-select-option-label small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.field-help {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
 }
 .destination-divider {
   height: 1px;
@@ -1659,7 +1694,8 @@ textarea::placeholder {
   color: var(--accent-ink);
   font-weight: 500;
 }
-.custom-time-Presets {
+.custom-time-Presets,
+.custom-date-presets {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
@@ -1667,7 +1703,8 @@ textarea::placeholder {
   margin-bottom: 8px;
   border-bottom: 1px solid var(--line);
 }
-.custom-time-Presets button {
+.custom-time-Presets button,
+.custom-date-presets button {
   padding: 4px 8px;
   border-radius: 5px;
   border: 1px solid var(--line);
@@ -1675,7 +1712,9 @@ textarea::placeholder {
   color: var(--muted);
 }
 .custom-time-Presets button:hover,
-.custom-time-Presets button.is-selected {
+.custom-time-Presets button.is-selected,
+.custom-date-presets button:hover,
+.custom-date-presets button.is-selected {
   border-color: var(--accent);
   background: var(--soft);
   color: var(--accent);

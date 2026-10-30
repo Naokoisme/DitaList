@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import {
   Archive,
   ArrowDownAZ,
@@ -1163,8 +1171,8 @@ export default function App() {
                 <span>清单</span>
                 <div>
                   <button
-                    title="新建文件夹"
-                    aria-label="新建文件夹"
+                    title="新建清单分组"
+                    aria-label="新建清单分组"
                     onClick={() => setListDialog("folder")}
                   >
                     <FolderPlus size={14} />
@@ -2698,7 +2706,6 @@ function TaskDetail({
         <div className="detail-list-select">
           <TaskDestinationSelect
             listId={task.listId}
-            dueDate={task.dueDate}
             lists={data.lists}
             ariaLabel="所属清单"
             popUp
@@ -2735,6 +2742,142 @@ export interface SelectOption<T extends string | number = string> {
   color?: string;
 }
 
+function AnchoredPopover({
+  anchorRef,
+  onClose,
+  className,
+  children,
+  role,
+  ariaLabel,
+  alignRight = false,
+  preferAbove = false,
+  maxHeight = 360,
+}: {
+  anchorRef: React.RefObject<HTMLElement | null>;
+  onClose: () => void;
+  className: string;
+  children: React.ReactNode;
+  role?: React.AriaRole;
+  ariaLabel?: string;
+  alignRight?: boolean;
+  preferAbove?: boolean;
+  maxHeight?: number;
+}) {
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState<{
+    top: number;
+    left: number;
+    maxHeight: number;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    const popover = popoverRef.current;
+    if (!anchor || !popover) return;
+    const reposition = () => {
+      const bounds = anchor.getBoundingClientRect();
+      const viewportWidth = document.documentElement.clientWidth;
+      const viewportHeight = document.documentElement.clientHeight;
+      const margin = 12;
+      const gap = 6;
+      const above = Math.max(0, bounds.top - margin - gap);
+      const below = Math.max(0, viewportHeight - bounds.bottom - margin - gap);
+      const contentHeight =
+        popover.scrollHeight + popover.offsetHeight - popover.clientHeight;
+      const desiredHeight = Math.min(maxHeight, contentHeight);
+      const useAbove = preferAbove
+        ? above >= desiredHeight || above > below
+        : below < desiredHeight && above > below;
+      const availableHeight = Math.min(maxHeight, useAbove ? above : below);
+      const height = Math.min(contentHeight, availableHeight);
+      const width = popover.getBoundingClientRect().width;
+      const next = {
+        top: Math.max(
+          margin,
+          Math.min(
+            useAbove ? bounds.top - gap - height : bounds.bottom + gap,
+            viewportHeight - margin - height,
+          ),
+        ),
+        left: Math.max(
+          margin,
+          Math.min(
+            alignRight ? bounds.right - width : bounds.left,
+            viewportWidth - margin - width,
+          ),
+        ),
+        maxHeight: availableHeight,
+      };
+      setPosition((previous) =>
+        previous &&
+        previous.top === next.top &&
+        previous.left === next.left &&
+        previous.maxHeight === next.maxHeight
+          ? previous
+          : next,
+      );
+    };
+    reposition();
+    const observer = new ResizeObserver(reposition);
+    observer.observe(anchor);
+    observer.observe(popover);
+    window.addEventListener("resize", reposition);
+    // Capture also observes scrolling inside a task dialog or details panel.
+    window.addEventListener("scroll", reposition, true);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+    };
+  }, [anchorRef, alignRight, preferAbove, maxHeight, children]);
+
+  useEffect(() => {
+    const handlePointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (
+        !anchorRef.current?.contains(target) &&
+        !popoverRef.current?.contains(target)
+      ) onClose();
+    };
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      // A picker closes first; the task dialog and its draft stay open.
+      onClose();
+      anchorRef.current
+        ?.querySelector<HTMLButtonElement>("button")
+        ?.focus({ preventScroll: true });
+    };
+    document.addEventListener("pointerdown", handlePointer, true);
+    document.addEventListener("keydown", handleKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointer, true);
+      document.removeEventListener("keydown", handleKey, true);
+    };
+  }, [anchorRef, onClose]);
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      className={`${className} viewport-popover`}
+      role={role}
+      aria-label={ariaLabel}
+      style={{
+        top: position?.top ?? 0,
+        left: position?.left ?? 0,
+        maxHeight: position?.maxHeight ?? maxHeight,
+        visibility: position ? "visible" : "hidden",
+      }}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => event.stopPropagation()}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
 export function CustomSelect<T extends string | number>({
   value,
   options,
@@ -2761,22 +2904,6 @@ export function CustomSelect<T extends string | number>({
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const selected = options.find((o) => o.value === value) || options[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const handlePointer = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
 
   return (
     <div className={`custom-select ${className}`} ref={wrapperRef}>
@@ -2812,10 +2939,15 @@ export function CustomSelect<T extends string | number>({
         {!iconOnly && <ChevronDown size={13} />}
       </button>
       {open && (
-        <div
-          className={`custom-select-popover ${alignRight ? "align-right" : ""} ${popUp ? "pop-up" : ""}`}
+        <AnchoredPopover
+          anchorRef={wrapperRef}
+          className="custom-select-popover"
           role="listbox"
-          onMouseDown={(e) => e.stopPropagation()}
+          ariaLabel={ariaLabel}
+          alignRight={alignRight}
+          preferAbove={popUp}
+          maxHeight={280}
+          onClose={() => setOpen(false)}
         >
           {options.map((opt) => (
             <button
@@ -2844,7 +2976,7 @@ export function CustomSelect<T extends string | number>({
               {opt.value === value && <Check size={13} />}
             </button>
           ))}
-        </div>
+        </AnchoredPopover>
       )}
     </div>
   );
@@ -2852,7 +2984,6 @@ export function CustomSelect<T extends string | number>({
 
 function TaskDestinationSelect({
   listId,
-  dueDate,
   lists,
   ariaLabel,
   popUp = false,
@@ -2860,174 +2991,94 @@ function TaskDestinationSelect({
   onNewList,
 }: {
   listId: string;
-  dueDate: string | null;
   lists: TaskList[];
   ariaLabel: string;
   popUp?: boolean;
-  onChange: (
-    patch: { listId?: string; dueDate?: string | null },
-    notice?: string,
-  ) => void;
+  onChange: (patch: { listId: string }, notice?: string) => void;
   onNewList?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
-  const today = localDate();
-  const tomorrow = addDays(today, 1);
-  const nextWeek = addDays(today, 7);
-  const availableLists = lists.filter((l) => !l.archived);
+  const availableLists = lists.filter((list) => !list.archived);
   const currentList =
-    availableLists.find((l) => l.id === listId) ||
-    lists.find((l) => l.id === listId) ||
-    availableLists[0];
-
-  useEffect(() => {
-    if (!open) return;
-    const handlePointer = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
-
-  const scheduleTag =
-    dueDate === today
-      ? "今天"
-      : dueDate === tomorrow
-        ? "明天"
-        : dueDate && dueDate > tomorrow && dueDate <= addDays(today, 6)
-          ? "最近7天"
-          : dueDate
-            ? dateText(dueDate)
-            : "";
+    availableLists.find((list) => list.id === listId) ||
+    lists.find((list) => list.id === listId);
 
   return (
-    <div
-      className="custom-select destination-select"
-      ref={wrapperRef}
-    >
+    <div className="custom-select destination-select" ref={wrapperRef}>
       <select
         className="sr-only-select"
         aria-label={ariaLabel}
         tabIndex={-1}
         value={listId}
-        onChange={(e) => onChange({ listId: e.target.value })}
+        onChange={(event) => onChange({ listId: event.target.value })}
       >
-        {availableLists.map((l) => (
-          <option key={l.id} value={l.id}>
-            {l.name}
+        {availableLists.map((list) => (
+          <option key={list.id} value={list.id}>
+            {list.name}
           </option>
         ))}
       </select>
       <button
         type="button"
         className="custom-select-trigger destination-trigger"
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        title={ariaLabel}
+        onClick={() => setOpen((value) => !value)}
       >
         <i
           className="custom-select-dot"
           style={{ background: currentList?.color || "#4772fa" }}
         />
         <span className="destination-trigger-text">
-          {currentList?.name || "收集箱"}
-          {scheduleTag && <small> · {scheduleTag}</small>}
+          清单：{currentList?.name || "收集箱"}
         </span>
         <ChevronDown size={13} />
       </button>
       {open && (
-        <div
-          className={`custom-select-popover destination-popover ${popUp ? "pop-up" : ""}`}
-          role="listbox"
-          onMouseDown={(e) => e.stopPropagation()}
+        <AnchoredPopover
+          anchorRef={wrapperRef}
+          className="custom-select-popover destination-popover"
+          role="dialog"
+          ariaLabel="选择归属清单"
+          preferAbove={popUp}
+          maxHeight={320}
+          onClose={() => setOpen(false)}
         >
-          <div className="destination-group-title">快捷排入（智能视图）</div>
-          <button
-            type="button"
-            className={`custom-select-option ${dueDate === today ? "is-selected" : ""}`}
-            onClick={() => {
-              onChange({ dueDate: today }, "已排入「今天」");
-              setOpen(false);
-            }}
+          <div className="destination-group-title">归属清单</div>
+          <p className="destination-hint">
+            不确定放哪里时，先留在收集箱，以后再归类。日期单独设置。
+          </p>
+          <div
+            className="destination-list-options"
+            role="listbox"
+            aria-label={ariaLabel}
           >
-            <span className="custom-select-option-label">
-              <CalendarDays size={14} />
-              今天
-            </span>
-            {dueDate === today && <Check size={13} />}
-          </button>
-          <button
-            type="button"
-            className={`custom-select-option ${dueDate === tomorrow ? "is-selected" : ""}`}
-            onClick={() => {
-              onChange({ dueDate: tomorrow }, "已排入「最近7天」（明天）");
-              setOpen(false);
-            }}
-          >
-            <span className="custom-select-option-label">
-              <CalendarRange size={14} />
-              明天 · 最近7天
-            </span>
-            {dueDate === tomorrow && <Check size={13} />}
-          </button>
-          <button
-            type="button"
-            className={`custom-select-option ${dueDate === nextWeek ? "is-selected" : ""}`}
-            onClick={() => {
-              onChange({ dueDate: nextWeek }, "已排入下周");
-              setOpen(false);
-            }}
-          >
-            <span className="custom-select-option-label">
-              <CalendarCheck2 size={14} />
-              下周（+7天）
-            </span>
-            {dueDate === nextWeek && <Check size={13} />}
-          </button>
-          <button
-            type="button"
-            className={`custom-select-option ${!dueDate ? "is-selected" : ""}`}
-            onClick={() => {
-              onChange({ dueDate: null, listId: "inbox" }, "已移回「收集箱」（无日期）");
-              setOpen(false);
-            }}
-          >
-            <span className="custom-select-option-label">
-              <Inbox size={14} />
-              仅收集箱（不设日期）
-            </span>
-            {!dueDate && listId === "inbox" && <Check size={13} />}
-          </button>
-          <div className="destination-divider" />
-          <div className="destination-group-title">所属清单</div>
-          {availableLists.map((l) => (
-            <button
-              type="button"
-              key={l.id}
-              className={`custom-select-option ${l.id === listId ? "is-selected" : ""}`}
-              onClick={() => {
-                onChange({ listId: l.id }, `已归入清单「${l.name}」`);
-                setOpen(false);
-              }}
-            >
-              <span className="custom-select-option-label">
-                <i
-                  className="custom-select-dot"
-                  style={{ background: l.color }}
-                />
-                {l.name}
-              </span>
-              {l.id === listId && <Check size={13} />}
-            </button>
-          ))}
+            {availableLists.map((list) => (
+              <button
+                type="button"
+                role="option"
+                aria-selected={list.id === listId}
+                key={list.id}
+                className={`custom-select-option ${list.id === listId ? "is-selected" : ""}`}
+                onClick={() => {
+                  onChange({ listId: list.id }, `已归入清单「${list.name}」`);
+                  setOpen(false);
+                }}
+              >
+                <span className="custom-select-option-label">
+                  <i
+                    className="custom-select-dot"
+                    style={{ background: list.color }}
+                  />
+                  {list.name}
+                  {list.id === "inbox" && <small>默认</small>}
+                </span>
+                {list.id === listId && <Check size={13} />}
+              </button>
+            ))}
+          </div>
           {onNewList && (
             <>
               <div className="destination-divider" />
@@ -3046,7 +3097,7 @@ function TaskDestinationSelect({
               </button>
             </>
           )}
-        </div>
+        </AnchoredPopover>
       )}
     </div>
   );
@@ -3075,22 +3126,6 @@ function CustomDateInput({
     }
   }, [value]);
 
-  useEffect(() => {
-    if (!open) return;
-    const handlePointer = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
-
   const [y, m] = viewMonth.split("-").map(Number);
   const firstOfMonth = new Date(y, m - 1, 1, 12);
   const offset = (firstOfMonth.getDay() + 6) % 7;
@@ -3107,16 +3142,40 @@ function CustomDateInput({
         type="text"
         value={value}
         aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         placeholder={placeholder}
         onFocus={() => setOpen(true)}
         onClick={() => setOpen(true)}
         onChange={(e) => onChange(e.target.value)}
       />
       {open && (
-        <div
+        <AnchoredPopover
+          anchorRef={wrapperRef}
           className="custom-picker-popover custom-date-popover"
-          onMouseDown={(e) => e.stopPropagation()}
+          role="dialog"
+          ariaLabel={ariaLabel}
+          onClose={() => setOpen(false)}
         >
+          <div className="custom-date-presets">
+            {[
+              { label: "今天", date: today },
+              { label: "明天", date: addDays(today, 1) },
+              { label: "7天后", date: addDays(today, 7) },
+            ].map((preset) => (
+              <button
+                type="button"
+                key={preset.date}
+                className={value === preset.date ? "is-selected" : ""}
+                onClick={() => {
+                  onChange(preset.date);
+                  setOpen(false);
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
           <div className="custom-picker-header">
             <button
               type="button"
@@ -3172,20 +3231,10 @@ function CustomDateInput({
                 setOpen(false);
               }}
             >
-              清除
-            </button>
-            <button
-              type="button"
-              className="is-primary"
-              onClick={() => {
-                onChange(today);
-                setOpen(false);
-              }}
-            >
-              今天
+              不设日期
             </button>
           </div>
-        </div>
+        </AnchoredPopover>
       )}
     </div>
   );
@@ -3213,37 +3262,27 @@ function CustomTimeInput({
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const handlePointer = (event: PointerEvent) => {
-      if (!wrapperRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const handleKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", handlePointer);
-    document.addEventListener("keydown", handleKey);
-    return () => {
-      document.removeEventListener("pointerdown", handlePointer);
-      document.removeEventListener("keydown", handleKey);
-    };
-  }, [open]);
-
   return (
     <div className="custom-picker" ref={wrapperRef}>
       <input
         type="text"
         value={value}
         aria-label={ariaLabel}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         placeholder={placeholder}
         onFocus={() => setOpen(true)}
         onClick={() => setOpen(true)}
         onChange={(e) => onChange(e.target.value)}
       />
       {open && (
-        <div
-          className={`custom-picker-popover custom-time-popover ${alignRight ? "align-right" : ""}`}
-          onMouseDown={(e) => e.stopPropagation()}
+        <AnchoredPopover
+          anchorRef={wrapperRef}
+          className="custom-picker-popover custom-time-popover"
+          role="dialog"
+          ariaLabel={ariaLabel}
+          alignRight={alignRight}
+          onClose={() => setOpen(false)}
         >
           <div className="custom-time-Presets">
             {["09:00", "12:00", "14:00", "18:00", "20:00"].map((preset) => (
@@ -3303,7 +3342,7 @@ function CustomTimeInput({
               现在
             </button>
           </div>
-        </div>
+        </AnchoredPopover>
       )}
     </div>
   );
@@ -3431,13 +3470,11 @@ function NewTaskDialog({
         <div className="dialog-footer">
           <TaskDestinationSelect
             listId={list}
-            dueDate={due || null}
             lists={data.lists}
             ariaLabel="新任务所属清单"
             onNewList={onNewList}
             onChange={(patch) => {
-              if (patch.listId !== undefined) setList(patch.listId);
-              if (patch.dueDate !== undefined) setDue(patch.dueDate || "");
+              setList(patch.listId);
             }}
           />
           <button className="text-button" type="button" onClick={onClose}>
@@ -3636,7 +3673,7 @@ function ListDialog({
         <div className="dialog-header">
           <h2>
             {value === "folder"
-              ? "新建文件夹"
+              ? "新建清单分组"
               : editing
                 ? "编辑清单"
                 : "添加清单"}
@@ -3654,7 +3691,7 @@ function ListDialog({
             onChange={(e) => setName(e.target.value)}
             maxLength={100}
             placeholder={
-              value === "folder" ? "文件夹名称" : "例如：工作、生活、学习"
+              value === "folder" ? "例如：工作相关、生活" : "例如：工作、生活、学习"
             }
             required
           />
@@ -3677,16 +3714,17 @@ function ListDialog({
               ))}
             </div>
             <div className="field-group">
-              <span>所在文件夹</span>
+              <span>清单分组（可选）</span>
               <CustomSelect
-                ariaLabel="所在文件夹"
+                ariaLabel="清单分组"
                 value={folderId}
                 options={[
-                  { value: "", label: "无" },
+                  { value: "", label: "不分组" },
                   ...data.folders.map((f) => ({ value: f.id, label: f.name })),
                 ]}
                 onChange={(val) => setFolder(String(val))}
               />
+              <p className="field-help">分组用于在侧栏整理多个清单，不分组时直接显示清单。</p>
             </div>
           </>
         )}

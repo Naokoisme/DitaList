@@ -270,12 +270,22 @@ export default function CalendarView({
   const [miniMonth, setMiniMonth] = useState(monthStart(anchor));
   const [gridHeight, setGridHeight] = useState(600);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
+  const [timeDropPreview, setTimeDropPreview] = useState<{
+    date: string;
+    time: string;
+  } | null>(null);
   const [range, setRange] = useState<{ start: string; end: string } | null>(
     null,
   );
   const [clock, setClock] = useState(new Date());
   const monthViewport = useRef<HTMLDivElement>(null);
   const timeViewport = useRef<HTMLDivElement>(null);
+  const timeDragPointer = useRef<{
+    date: string;
+    clientY: number;
+    column: HTMLElement;
+  } | null>(null);
   const rangeRef = useRef<{ start: string; end: string } | null>(null);
   const holdTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
@@ -367,15 +377,20 @@ export default function CalendarView({
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
-    if (!draggingBacklog) return;
-    const finish = () => setDraggingBacklog(false);
+    const finish = () => {
+      setDraggingBacklog(false);
+      setDraggedTaskId(null);
+      setDragOver(null);
+      setTimeDropPreview(null);
+      timeDragPointer.current = null;
+    };
     window.addEventListener("dragend", finish, true);
     window.addEventListener("drop", finish, true);
     return () => {
       window.removeEventListener("dragend", finish, true);
       window.removeEventListener("drop", finish, true);
     };
-  }, [draggingBacklog]);
+  }, []);
   useEffect(() => {
     if (!openPopover) return;
     const container = (openPopover === "date"
@@ -477,20 +492,64 @@ export default function CalendarView({
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/dida-task", task.id);
     event.dataTransfer.setData("text/plain", task.id);
+    setDraggedTaskId(task.id);
+    clearDropTarget();
+    if (mode === "day" || mode === "week") {
+      // The snapped line is the start-time anchor. A native card ghost would
+      // retain the grab offset and appear to start earlier than the drop time.
+      const ghost = document.createElement("canvas");
+      ghost.width = ghost.height = 1;
+      ghost.style.cssText = "position:fixed;top:0;left:0;pointer-events:none";
+      document.body.appendChild(ghost);
+      event.dataTransfer.setDragImage(ghost, 0, 0);
+      requestAnimationFrame(() => ghost.remove());
+    }
+  }
+  function clearDropTarget() {
+    setDragOver(null);
+    setTimeDropPreview(null);
+    timeDragPointer.current = null;
+  }
+  function leaveDropTarget(event: DragEvent<HTMLElement>) {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+      clearDropTarget();
+  }
+  function updateTimeDropPreview() {
+    const pointer = timeDragPointer.current;
+    if (!pointer) return;
+    const time = timeAtOffset(
+      pointer.clientY - pointer.column.getBoundingClientRect().top,
+    );
+    setTimeDropPreview((previous) =>
+      previous?.date === pointer.date && previous.time === time
+        ? previous
+        : { date: pointer.date, time },
+    );
   }
   function drop(event: DragEvent, date: string, time?: string | null) {
     event.preventDefault();
     event.stopPropagation();
-    setDragOver(null);
+    clearDropTarget();
     const id = event.dataTransfer.getData("text/dida-task");
     if (id && data.tasks.some((task) => task.id === id && !task.deletedAt))
       onMoveTask(id, date, time);
   }
-  function allowDrop(event: DragEvent, date: string) {
+  function allowDrop(event: DragEvent<HTMLElement>, date: string, timed = false) {
     if (event.dataTransfer.types.includes("text/dida-task")) {
       event.preventDefault();
       event.dataTransfer.dropEffect = "move";
       setDragOver(date);
+      if (timed) {
+        timeDragPointer.current = {
+          date,
+          clientY: event.clientY,
+          column: event.currentTarget,
+        };
+        updateTimeDropPreview();
+      } else {
+        timeDragPointer.current = null;
+        setTimeDropPreview(null);
+      }
     }
   }
   function weekDropDate(event: DragEvent<HTMLElement>, start: string) {
@@ -534,11 +593,11 @@ export default function CalendarView({
     return (
       <div
         key={task.id}
-        className={`cal-event ${task.completedAt ? "cal-event--completed" : ""} ${extraClass}`}
+        className={`cal-event ${task.completedAt ? "cal-event--completed" : ""} ${task.id === draggedTaskId ? "is-drag-source" : ""} ${extraClass}`}
         style={style ?? eventStyle(task)}
         draggable
         onDragStart={(event) => dragStart(event, task)}
-        onDragEnd={() => setDragOver(null)}
+        onDragEnd={clearDropTarget}
         onClick={(event) => {
           event.stopPropagation();
           onSelectTask(task.id);
@@ -571,6 +630,7 @@ export default function CalendarView({
   }
 
   const miniStart = weekStart(miniMonth, settingsWeekStart);
+  const draggedTask = data.tasks.find((task) => task.id === draggedTaskId);
   const miniDates = Array.from({ length: 42 }, (_, i) => addDays(miniStart, i));
   const agendaDates = Array.from(
     { length: parseDate(monthEnd(anchor)).getDate() },
@@ -1052,12 +1112,13 @@ export default function CalendarView({
                   <div
                     key={date}
                     className={
-                      dragOver === date
+                      dragOver === date && !timeDropPreview
                         ? "cal-time-allday-cell is-drop"
                         : "cal-time-allday-cell"
                     }
                     onDoubleClick={() => onCreateTask(date)}
                     onDragOver={(event) => allowDrop(event, date)}
+                    onDragLeave={leaveDropTarget}
                     onDrop={(event) => drop(event, date, null)}
                   >
                     {tasks
@@ -1067,7 +1128,11 @@ export default function CalendarView({
                   </div>
                 ))}
               </div>
-              <div className="cal-time-scroll" ref={timeViewport}>
+              <div
+                className="cal-time-scroll"
+                ref={timeViewport}
+                onScroll={updateTimeDropPreview}
+              >
                 <div
                   className="cal-time-canvas"
                   style={
@@ -1088,8 +1153,9 @@ export default function CalendarView({
                   {timeDates.map((date) => (
                     <div
                       key={date}
-                      className={`cal-time-column ${date === today ? "is-today" : ""} ${dragOver === date ? "is-drop" : ""}`}
-                      onDragOver={(event) => allowDrop(event, date)}
+                      className={`cal-time-column ${date === today ? "is-today" : ""} ${timeDropPreview?.date === date ? "is-drop" : ""}`}
+                      onDragOver={(event) => allowDrop(event, date, true)}
+                      onDragLeave={leaveDropTarget}
                       onDrop={(event) =>
                         drop(
                           event,
@@ -1137,6 +1203,23 @@ export default function CalendarView({
                           )}
                         </div>
                       ))}
+                      {timeDropPreview?.date === date && (
+                        <div
+                          className={`cal-drop-marker ${timeDropPreview.time >= "23:30" ? "is-near-end" : ""}`}
+                          style={{
+                            top: (minutes(timeDropPreview.time, 0) / 60) * HOUR_HEIGHT,
+                          }}
+                        >
+                          <div
+                            className="cal-drop-caption"
+                            role="status"
+                            aria-label={`开始时间 ${timeDropPreview.time}`}
+                          >
+                            <strong>{timeDropPreview.time}</strong>
+                            <span>{draggedTask?.title || "安排任务"}</span>
+                          </div>
+                        </div>
+                      )}
                       {date === today && (
                         <div
                           className="cal-now-line"

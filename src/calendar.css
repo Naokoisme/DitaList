@@ -825,17 +825,24 @@
   flex: none;
 }
 .cal-time-view {
+  --time-gutter-width: 56px;
   display: flex;
   flex: 1;
   min-width: 0;
   min-height: 0;
   flex-direction: column;
 }
+.cal-time-head,
+.cal-all-day,
+.cal-time-canvas {
+  grid-template-columns: var(--time-gutter-width) repeat(var(--time-days), minmax(0, 1fr));
+}
 .cal-time-head {
   display: grid;
-  grid-template-columns: 56px repeat(var(--time-days), minmax(0, 1fr));
   flex: none;
-  padding-right: 8px;
+  /* Match the timed grid's real scrollbar gutter at every scale and width. */
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
   border-bottom: 1px solid var(--line, rgba(0, 0, 0, 0.05));
 }
 .cal-time-dayhead {
@@ -876,12 +883,11 @@
 }
 .cal-all-day {
   display: grid;
-  grid-template-columns: 56px repeat(var(--time-days), minmax(0, 1fr));
   min-height: 31px;
   max-height: 137px;
   overflow-y: auto;
   flex: none;
-  padding-right: 8px;
+  scrollbar-gutter: stable;
   border-bottom: 1px solid var(--line, rgba(0, 0, 0, 0.08));
 }
 .cal-time-gutter {
@@ -912,7 +918,6 @@
 .cal-time-canvas {
   position: relative;
   display: grid;
-  grid-template-columns: 56px repeat(var(--time-days), minmax(0, 1fr));
 }
 .cal-hour-labels {
   position: relative;
@@ -959,6 +964,57 @@
   min-height: 20px;
   padding: 0 0 1px;
   box-sizing: border-box;
+}
+.cal-time-view .cal-event.is-drag-source {
+  opacity: 0.3;
+}
+.cal-drop-marker {
+  position: absolute;
+  inset-inline: 0;
+  height: 0;
+  border-top: 2px solid var(--accent-ink);
+  z-index: 5;
+  pointer-events: none;
+}
+.cal-drop-marker::before {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-ink);
+}
+.cal-drop-caption {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  max-width: calc(100% - 8px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 4px;
+  color: var(--accent-ink);
+  background: var(--panel);
+  box-shadow: 0 2px 8px #0001;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.cal-drop-caption > strong {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+}
+.cal-drop-caption > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.cal-drop-marker.is-near-end .cal-drop-caption {
+  top: auto;
+  bottom: 5px;
 }
 .cal-event--timed {
   height: 100%;
@@ -1255,9 +1311,8 @@
     white-space: nowrap;
     text-align: center;
   }
-  .cal-time-head {
-    grid-template-columns: 37px repeat(var(--time-days), minmax(0, 1fr));
-    padding-right: 4px;
+  .cal-time-view {
+    --time-gutter-width: 37px;
   }
   .cal-time-dayhead {
     height: 63px;
@@ -1271,13 +1326,6 @@
   }
   .cal-time-dayhead > small {
     font-size: 9px;
-  }
-  .cal-all-day {
-    grid-template-columns: 37px repeat(var(--time-days), minmax(0, 1fr));
-    padding-right: 4px;
-  }
-  .cal-time-canvas {
-    grid-template-columns: 37px repeat(var(--time-days), minmax(0, 1fr));
   }
   .cal-time-gutter {
     font-size: 9px;
