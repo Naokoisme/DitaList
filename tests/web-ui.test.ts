@@ -194,11 +194,32 @@ test("main morph honors reduced motion and keeps compact navigation at the targe
     }));
     await page.waitForFunction(() => (window as any).__fixture.actions.some((action: any) => action.action === "mainMotionFinished"));
     assert.equal(await page.locator(".window-controls").evaluate((node) => getComputedStyle(node).display), "none");
+    const navigationLayout = () => page.evaluate(() => {
+      const origin = document.getElementById("main-window-content")!.getBoundingClientRect();
+      return {
+        railDirection: getComputedStyle(document.querySelector(".icon-rail")!).flexDirection,
+        scrollDirection: getComputedStyle(document.querySelector(".navigation-rail-scroll")!).flexDirection,
+        items: [...document.querySelectorAll<HTMLElement>(".navigation-sortable-rail")].map((item) => {
+          const bounds = item.getBoundingClientRect();
+          return {id: item.dataset.navigationId, x: bounds.x - origin.x, y: bounds.y - origin.y,
+            width: bounds.width, height: bounds.height};
+        }),
+      };
+    });
+    const duringHandoff = await navigationLayout();
+    assert.equal(duringHandoff.railDirection, "row");
+    assert.equal(duringHandoff.scrollDirection, "row");
+    assert.ok(duringHandoff.items.length > 1);
+    for (let i = 1; i < duringHandoff.items.length; i++) {
+      assert.equal(duringHandoff.items[i].y, duringHandoff.items[0].y);
+      assert.ok(duringHandoff.items[i].x > duringHandoff.items[i - 1].x);
+    }
     assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
     assert.equal(await page.evaluate(() => (window as any).__fixture.actions.some((action: any) => action.action === "mainMotionPrepared")), false);
     await page.setViewportSize({width: 600, height: 700});
     await page.evaluate(() => (window as any).__fixture.emit("desktop://main-motion", {phase: "settled", id: 10}));
     assert.equal(await page.locator("#main-window-surface").evaluate((node) => (node as HTMLElement).inert), false);
+    assert.deepEqual(await navigationLayout(), duringHandoff, "canvas handoff must not reflow the compact navigation");
   } finally { await page.close(); }
 });
 

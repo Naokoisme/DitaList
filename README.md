@@ -2,6 +2,8 @@
 
 Windows 本地任务与日历客户端。复用 DitaList 的 React 界面，使用 Rust 核心、原生悬浮栏和按需创建的 Tauri WebView2 窗口。
 
+当前维护主线已全面转向 Tauri＋Rust。原 Electron／Android 方案停止作为后续开发路线，源码保留在 Git 历史中。
+
 此工程位于 `D:\ditalist-rust`，是独立预览项目。原版来源及后续增量见 [源码来源](docs/source-provenance.md)。默认数据为 `%APPDATA%\DitaListRustPreview\data`；不会自动读取日用版数据。可从设置显式导入 JSON／CSV 备份，旧文件保持原样。
 
 ## 运行和构建

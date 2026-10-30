@@ -65,7 +65,7 @@
   color: var(--accent-ink);
   background: var(--soft);
 }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .customizable-icon-rail .navigation-rail-scroll {
     flex-direction: row;
     align-items: center;
@@ -191,7 +191,7 @@
 .navigation-edit-toolbar button:hover { background: var(--hover); }
 .navigation-edit-toolbar .navigation-edit-done { background: var(--accent); color: white; }
 .navigation-edit-toolbar p { color: var(--danger, #d44); margin: 7px 0 0; }
-@media (max-width: 700px) {
+@container app-viewport (max-width: 700px) {
   .navigation-sortable-rail { flex: 0 0 44px; width: 44px; }
   .navigation-sortable-rail.drop-before::before,
   .navigation-sortable-rail.drop-after::after { top: 2px; bottom: 2px; width: 3px; height: auto; }
