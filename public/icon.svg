@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="DitaList 开口方框 N 图标">
+  <style>
+    path { stroke: #182030; }
+    @media (prefers-color-scheme: dark) { path { stroke: #EDF2FA; } }
+  </style>
+  <path d="M15 5H8A3 3 0 0 0 5 8V24A3 3 0 0 0 8 27H24A3 3 0 0 0 27 24V17" fill="none" stroke="#182030" stroke-width="1.8" stroke-linecap="round"/>
+  <path d="M11 21V10L22 21V10" fill="none" stroke="#182030" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

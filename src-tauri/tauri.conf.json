@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DitaList Rust Preview",
+  "version": "0.0.0",
+  "identifier": "Naoko.DitaList.RustPreview",
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://127.0.0.1:4318", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
+  "app": {
+    "windows": [],
+    "security": { "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self' data:" }
+  },
+  "bundle": { "active": false, "icon": ["../public/icon.ico"] }
+}

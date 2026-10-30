@@ -1,0 +1,6 @@
+{
+  "identifier": "desktop",
+  "description": "Local DitaList main and quick input windows",
+  "windows": ["main", "quick"],
+  "permissions": ["core:default", "core:window:allow-start-dragging", "dialog:allow-open", "dialog:allow-save", "opener:allow-open-path"]
+}

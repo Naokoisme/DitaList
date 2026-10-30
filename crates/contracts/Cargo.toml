@@ -1,0 +1,10 @@
+[package]
+name = "ditalist-contracts"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+ts-rs.workspace = true

@@ -1,0 +1,96 @@
+.customizable-icon-rail .local-avatar {
+  flex-shrink: 0;
+}
+.customizable-icon-rail .navigation-rail-scroll {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  -webkit-app-region: no-drag;
+}
+.customizable-icon-rail .rail-primary,
+.customizable-icon-rail .rail-bottom {
+  flex-shrink: 0;
+}
+.customizable-icon-rail .rail-bottom {
+  align-items: center;
+  width: 100%;
+  padding-bottom: 0;
+}
+.customizable-icon-rail .navigation-editor-trigger {
+  flex-shrink: 0;
+  margin: 10px 0 13px;
+}
+.customizable-sidebar .navigation-sidebar-scroll {
+  padding-bottom: 12px;
+}
+.navigation-sidebar-scroll .navigation-section {
+  margin: 20px 0 14px;
+}
+.navigation-sidebar-scroll .navigation-section:first-child {
+  margin-top: 0;
+}
+.navigation-sidebar-scroll .navigation-section + .navigation-system-entry {
+  margin-top: 14px;
+}
+.navigation-sidebar-footer {
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+.navigation-sidebar-footer .sidebar-local-note {
+  padding-top: 8px;
+}
+.navigation-customize-button,
+.navigation-hidden-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  padding: 6px 11px;
+  font-size: 12px;
+  border-radius: 5px;
+  text-align: left;
+  max-width: 100%;
+  -webkit-app-region: no-drag;
+}
+.navigation-hidden-entry {
+  font-size: 11px;
+}
+.navigation-customize-button:hover,
+.navigation-hidden-entry:hover {
+  color: var(--accent-ink);
+  background: var(--soft);
+}
+@media (max-width: 700px) {
+  .customizable-icon-rail .navigation-rail-scroll {
+    flex-direction: row;
+    align-items: center;
+    gap: 2px;
+    width: auto;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+  .customizable-icon-rail .rail-primary,
+  .customizable-icon-rail .rail-bottom {
+    display: contents;
+  }
+  .customizable-icon-rail .rail-button,
+  .customizable-icon-rail .rail-primary > .rail-button:last-child {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+  }
+  .customizable-icon-rail .navigation-editor-trigger {
+    margin: 0 0 0 3px;
+    border-left: 1px solid var(--line);
+    border-radius: 0;
+  }
+}

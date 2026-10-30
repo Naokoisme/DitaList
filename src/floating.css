@@ -1,0 +1,23 @@
+:root { font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif; color-scheme: light; color: #333741; background: transparent; font-synthesis: none; -webkit-font-smoothing: antialiased; --accent: #4772fa; --surface: #fff; --text: #333741; --muted: #92959e; --line: #dfe1e7; --hover: #f2f3f6; --shadow: 0 3px 10px #17213c18; }
+:root[data-theme="dark"] { color-scheme: dark; --surface: #292b30; --text: #e7e8ec; --muted: #989ca7; --line: #454850; --hover: #373a42; --shadow: 0 3px 10px #0005; }
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+button, textarea { font: inherit; color: inherit; }
+button { border: 0; padding: 0; background: transparent; cursor: pointer; user-select: none; }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
+button:disabled { cursor: default; opacity: .5; }
+button svg { pointer-events: none; flex-shrink: 0; }
+.floating-shell { position: absolute; left: 10px; top: 10px; max-width: calc(100vw - 20px); color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); overflow: hidden; }
+.floating-form { display: flex; align-items: center; min-height: 40px; }
+.floating-grip, .floating-add { display: grid; place-items: center; width: 40px; min-height: 40px; align-self: stretch; flex: 0 0 40px; }
+.floating-grip { color: var(--muted); cursor: grab; touch-action: none; border-right: 1px solid var(--line); }
+.floating-today { padding: 0 10px; min-height: 40px; flex: 0 0 auto; font-size: 14px; border-right: 1px solid var(--line); white-space: nowrap; }
+.floating-today b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.floating-close { display: grid; place-items: center; width: 28px; min-height: 40px; flex: 0 0 28px; color: var(--muted); }
+.floating-grip:hover, .floating-today:hover, .floating-close:hover { background: var(--hover); }
+.floating-form textarea { display: block; flex: 1; min-width: 0; min-height: 24px; max-height: 144px; margin: 8px 0; padding: 0 10px; border: 0; outline: 0; resize: none; color: var(--text); background: transparent; font-size: 14px; line-height: 24px; overflow-x: hidden; overflow-y: auto; scrollbar-width: thin; overflow-wrap: anywhere; }
+.floating-form textarea::placeholder { color: var(--muted); }
+.floating-add { color: var(--accent); }
+.floating-add:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.floating-hint { padding: 0 12px 8px 50px; color: var(--muted); font-size: 11px; line-height: 16px; max-height: 40px; overflow: auto; }
+.floating-measure { position: fixed; left: -100000px; top: 0; white-space: pre; font-size: 14px; line-height: 24px; visibility: hidden; }

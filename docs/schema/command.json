@@ -1,0 +1,578 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CoreCommand",
+  "type": "object",
+  "properties": {
+    "operation": {
+      "$ref": "#/$defs/Operation"
+    },
+    "requestId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "requestId",
+    "operation"
+  ],
+  "$defs": {
+    "ListMoveTarget": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "folderId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "group"
+            }
+          },
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "list"
+            },
+            "listId": {
+              "type": "string"
+            },
+            "position": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "listId",
+            "position"
+          ]
+        }
+      ]
+    },
+    "NavigationPreferences": {
+      "type": "object",
+      "properties": {
+        "hidden": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "orders": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "default": {}
+        }
+      }
+    },
+    "Operation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "input": true,
+            "type": {
+              "type": "string",
+              "const": "taskCreate"
+            }
+          },
+          "required": [
+            "type",
+            "input"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "date": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "listId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "overrides": {
+              "default": null
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "quickAdd"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "expectedVersion": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "default": null,
+              "minimum": 0
+            },
+            "id": {
+              "type": "string"
+            },
+            "patch": true,
+            "type": {
+              "type": "string",
+              "const": "taskUpdate"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "patch"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "completed": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "taskComplete"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "completed"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "taskTrash"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "taskRestore"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "confirmed": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "taskPurge"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "confirmed"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "confirmed": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "trashEmpty"
+            }
+          },
+          "required": [
+            "type",
+            "confirmed"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "trashRestoreAll"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "taskCopy"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "taskReorder"
+            }
+          },
+          "required": [
+            "type",
+            "ids"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "taskMove"
+            },
+            "view": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "view"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "target": {
+              "$ref": "#/$defs/ListMoveTarget"
+            },
+            "type": {
+              "type": "string",
+              "const": "listMove"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "target"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "collection": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "collectionUpsert"
+            },
+            "value": true
+          },
+          "required": [
+            "type",
+            "collection",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "collection": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "collectionDelete"
+            }
+          },
+          "required": [
+            "type",
+            "collection",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "patch": true,
+            "type": {
+              "type": "string",
+              "const": "settingsUpdate"
+            }
+          },
+          "required": [
+            "type",
+            "patch"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "preferences": {
+              "$ref": "#/$defs/NavigationPreferences"
+            },
+            "renames": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "navigationUpdate"
+            }
+          },
+          "required": [
+            "type",
+            "preferences",
+            "renames"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "patch": true,
+            "type": {
+              "type": "string",
+              "const": "preferencesUpdate"
+            }
+          },
+          "required": [
+            "type",
+            "patch"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tagRename"
+            }
+          },
+          "required": [
+            "type",
+            "from",
+            "to"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tagDelete"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "date": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "habitRecord"
+            },
+            "value": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "date",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "taskId": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "type": {
+              "type": "string",
+              "const": "focus"
+            }
+          },
+          "required": [
+            "type",
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "reminder"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "action"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "agentApprove"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "agentReject"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "import"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        }
+      ]
+    }
+  }
+}
