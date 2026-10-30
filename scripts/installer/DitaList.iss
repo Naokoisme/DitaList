@@ -50,9 +50,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#PayloadDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\DitaList"; Filename: "{app}\DitaList.exe"; WorkingDir: "{app}"; AppUserModelID: "Naoko.DitaList"
+Name: "{group}\DitaList"; Filename: "{app}\DitaList.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\dist\icon.ico"; IconIndex: 0; AppUserModelID: "Naoko.DitaList"
 ; The portable app can also update this link. Uninstall removes it only if it still points here.
-Name: "{userdesktop}\DitaList"; Filename: "{app}\DitaList.exe"; WorkingDir: "{app}"; AppUserModelID: "Naoko.DitaList"; Tasks: desktopicon; Flags: uninsneveruninstall
+Name: "{userdesktop}\DitaList"; Filename: "{app}\DitaList.exe"; WorkingDir: "{app}"; IconFilename: "{app}\resources\app\dist\icon.ico"; IconIndex: 0; AppUserModelID: "Naoko.DitaList"; Tasks: desktopicon; Flags: uninsneveruninstall
 
 [Run]
 Filename: "{app}\DitaList.exe"; Description: "{cm:LaunchProgram,DitaList}"; Flags: nowait postinstall skipifsilent

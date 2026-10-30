@@ -20,8 +20,9 @@ const { randomUUID } = require("node:crypto");
 const { McpServer, createMcpHandler } = require("@modelcontextprotocol/server");
 const { z } = require("zod");
 
+const applicationId = "Naoko.DitaList";
 app.setName("DitaList");
-app.setAppUserModelId("Naoko.DitaList");
+app.setAppUserModelId(applicationId);
 protocol.registerSchemesAsPrivileged([
   {
     scheme: "dida-local",
@@ -42,6 +43,10 @@ const dataDirectory =
 const databasePath = path.join(dataDirectory, "database.json");
 const backupPath = path.join(dataDirectory, "database.backup.json");
 const distDirectory = path.resolve(__dirname, "..", "dist");
+const applicationIconPath = path.join(
+  distDirectory,
+  process.platform === "win32" ? "icon.ico" : "icon.png",
+);
 const mcpPipePath =
   process.env.DIDA_LOCAL_MCP_PIPE ||
   (process.platform === "win32"
@@ -802,7 +807,7 @@ function createFloatingWindow() {
     skipTaskbar: true,
     backgroundColor: "#00000000",
     title: "DitaList 快速添加",
-    icon: path.join(distDirectory, "icon.png"),
+    icon: applicationIconPath,
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
@@ -876,9 +881,7 @@ function quitApplication() {
 
 function createTray() {
   if (process.env.DIDA_LOCAL_HEADLESS === "1" || tray) return;
-  tray = new Tray(
-    path.join(distDirectory, process.platform === "win32" ? "icon.ico" : "icon.png"),
-  );
+  tray = new Tray(applicationIconPath);
   tray.setToolTip("DitaList");
   tray.setContextMenu(
     Menu.buildFromTemplate([
@@ -1022,12 +1025,12 @@ function desktopShortcutDetails() {
   const target = process.execPath;
   return {
     target,
-    args: process.defaultApp ? JSON.stringify(app.getAppPath()) : "",
+    args: process.defaultApp ? `"${app.getAppPath()}"` : "",
     cwd: path.dirname(target),
     description: "DitaList 本地任务管理",
-    icon: path.join(distDirectory, "icon.ico"),
+    icon: applicationIconPath,
     iconIndex: 0,
-    appUserModelId: "Naoko.DitaList",
+    appUserModelId: applicationId,
   };
 }
 
@@ -1252,7 +1255,7 @@ function createWindow(showWhenReady = true) {
     minHeight: 500,
     backgroundColor: "#ffffff",
     title: "DitaList",
-    icon: path.join(distDirectory, "icon.png"),
+    icon: applicationIconPath,
     frame: false,
     show: false,
     webPreferences: {
@@ -1263,6 +1266,19 @@ function createWindow(showWhenReady = true) {
       webSecurity: true,
     },
   });
+  if (process.platform === "win32") {
+    // The taskbar group and pinned shortcut use relaunch metadata separately
+    // from the window icon, especially when launched through electron.exe.
+    mainWindow.setAppDetails({
+      appId: applicationId,
+      appIconPath: applicationIconPath,
+      appIconIndex: 0,
+      relaunchCommand: process.defaultApp
+        ? `"${process.execPath}" "${app.getAppPath()}"`
+        : `"${process.execPath}"`,
+      relaunchDisplayName: app.getName(),
+    });
+  }
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("did-start-loading", () => {
     quickAddReceiver = null;
