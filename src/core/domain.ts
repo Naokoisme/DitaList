@@ -16,9 +16,20 @@ export function addDays(date: string, count: number): string {
   return localDate(result);
 }
 
-function isDate(value: string): boolean {
+export function isDate(value: string): boolean {
   return (
     /^\d{4}-\d{2}-\d{2}$/.test(value) && localDate(dateObject(value)) === value
+  );
+}
+
+export function isInDateView(
+  dueDate: string | null,
+  view: "today" | "next7",
+  today = localDate(),
+): boolean {
+  // Both smart date views retain overdue tasks; next7 includes today and six more days.
+  return Boolean(
+    dueDate && dueDate <= (view === "today" ? today : addDays(today, 6)),
   );
 }
 

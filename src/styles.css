@@ -372,6 +372,60 @@ textarea::placeholder {
 .sidebar-list-item:hover .sidebar-item {
   padding-right: 30px;
 }
+.sidebar-item.draggable-list {
+  cursor: grab;
+}
+.sidebar-item.draggable-list:active {
+  cursor: grabbing;
+}
+.sidebar-list-item.is-list-dragging > .sidebar-item {
+  opacity: 0.4;
+}
+.sidebar-list-item.list-drop-before::before,
+.sidebar-list-item.list-drop-after::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  right: 5px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+.sidebar-list-item.list-drop-before::before {
+  top: 0;
+}
+.sidebar-list-item.list-drop-after::after {
+  bottom: 0;
+}
+.sidebar-folder .sidebar-list-item.list-drop-before::before,
+.sidebar-folder .sidebar-list-item.list-drop-after::after {
+  left: 25px;
+}
+.list-root-heading,
+.sidebar-folder summary {
+  border-radius: 6px;
+}
+.list-group-drop-candidate,
+.list-root-drop {
+  outline: 1px dashed var(--line);
+  outline-offset: -1px;
+}
+.list-root-drop {
+  margin: 6px 2px 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  text-align: center;
+  color: var(--muted);
+  border-radius: 6px;
+}
+.list-group-drag-over {
+  color: var(--accent-ink);
+  background: var(--soft);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
 .list-edit-button {
   position: absolute;
   right: 8px;
@@ -451,6 +505,17 @@ textarea::placeholder {
 }
 .sidebar-folder summary > svg:first-child {
   color: var(--muted);
+}
+.sidebar-folder summary > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-folder summary > small {
+  font-size: 11px;
+  flex-shrink: 0;
 }
 .sidebar-folder[open] summary > svg:first-child {
   transform: rotate(90deg);
@@ -1413,6 +1478,29 @@ textarea::placeholder {
   border: 0 !important;
   min-width: 0;
   flex: 1;
+}
+.task-date-hint {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+.task-date-view {
+  background: var(--soft);
+  color: var(--accent-ink);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.task-date-relative {
+  color: var(--text);
+  margin-right: 3px;
+}
+.date-dialog > .task-date-hint {
+  margin-top: -8px;
 }
 .sr-only-select {
   position: absolute;

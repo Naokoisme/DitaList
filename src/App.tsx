@@ -71,12 +71,15 @@ import {
   completeTask,
   createTask,
   importBackupText,
+  isInDateView,
   localDate,
   parseQuickInput,
   validateData,
 } from "./core/domain";
 import { exportData, loadData, saveData } from "./core/storage";
+import { moveTaskList, type ListMoveTarget } from "./core/list-organization";
 import CalendarView from "./components/CalendarView";
+import TaskDateHint from "./components/TaskDateHint";
 import { FocusView, HabitsView, MatrixView } from "./components/Tools";
 import "./calendar.css";
 
@@ -283,6 +286,8 @@ export default function App() {
   const [agentReviewOpen, setAgentReviewOpen] = useState(false);
   const [dragOverNav, setDragOverNav] = useState<string | null>(null);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
+  const [draggingListId, setDraggingListId] = useState<string | null>(null);
+  const [listDropTarget, setListDropTarget] = useState<ListMoveTarget | null>(null);
   const quickRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const searchTargetId = useRef<string | null>(null);
@@ -368,6 +373,8 @@ export default function App() {
     const clearDrag = () => {
       setDraggingTaskId(null);
       setDragOverNav(null);
+      setDraggingListId(null);
+      setListDropTarget(null);
     };
     window.addEventListener("dragend", clearDrag);
     window.addEventListener("drop", clearDrag);
@@ -611,12 +618,8 @@ export default function App() {
     );
     const today = localDate();
     if (view === "completed") tasks = tasks.filter((t) => !!t.completedAt);
-    else if (view === "today")
-      tasks = tasks.filter((t) => !!t.dueDate && t.dueDate <= today);
-    else if (view === "next7")
-      tasks = tasks.filter(
-        (t) => !!t.dueDate && t.dueDate <= addDays(today, 6),
-      );
+    else if (view === "today" || view === "next7")
+      tasks = tasks.filter((t) => isInDateView(t.dueDate, view, today));
     else if (view === "inbox")
       tasks = tasks.filter((t) => t.listId === "inbox");
     else if (view.startsWith("list:"))
@@ -889,7 +892,54 @@ export default function App() {
     }
   };
 
-  const hasDropHintTask = Boolean(draggingTaskId || selectedId);
+  const orderedLists = data.lists
+    .filter((list) => list.id !== "inbox" && !list.archived)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  const hasDropHintTask = !draggingListId && Boolean(draggingTaskId || selectedId);
+
+  const handleListDrop = (e: React.DragEvent, target: ListMoveTarget) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const listId = e.dataTransfer.getData("text/dida-list");
+    setDraggingListId(null);
+    setListDropTarget(null);
+    if (!listId || listId !== draggingListId) return;
+    const current = latestData.current;
+    if (!current) return;
+    const next = moveTaskList(current, listId, target);
+    if (next === current) return;
+    update((state) => moveTaskList(state, listId, target));
+    const moved = next.lists.find((list) => list.id === listId)!;
+    const previous = current.lists.find((list) => list.id === listId)!;
+    if (moved.folderId === previous.folderId) {
+      setToast("已调整清单顺序");
+    } else {
+      const folder = next.folders.find((item) => item.id === moved.folderId);
+      setToast(folder ? `已将清单「${moved.name}」移入「${folder.name}」` :
+        `已将清单「${moved.name}」移出分组`);
+    }
+  };
+
+  const listGroupDropProps = (folderId: string | null) => ({
+    onDragOver: (e: React.DragEvent<HTMLElement>) => {
+      if (!draggingListId || !e.dataTransfer.types.includes("text/dida-list")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = "move";
+      setListDropTarget({ kind: "group", folderId });
+    },
+    onDragLeave: (e: React.DragEvent<HTMLElement>) => {
+      if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+      setListDropTarget((target) => target?.kind === "group" &&
+        target.folderId === folderId ? null : target);
+    },
+    onDrop: (e: React.DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes("text/dida-list")) return;
+      const details = e.currentTarget.closest("details");
+      handleListDrop(e, { kind: "group", folderId });
+      if (details) details.open = true;
+    },
+  });
 
   const sidebarItem = (
     id: ViewId,
@@ -914,6 +964,7 @@ export default function App() {
         onDragOver={
           droppable
             ? (e) => {
+                if (!e.dataTransfer.types.includes("text/dida-task")) return;
                 e.preventDefault();
                 if (dragOverNav !== id) setDragOverNav(id);
               }
@@ -929,6 +980,7 @@ export default function App() {
         onDrop={
           droppable
             ? (e) => {
+                if (!e.dataTransfer.types.includes("text/dida-task")) return;
                 e.preventDefault();
                 handleSidebarDrop(
                   id,
@@ -948,28 +1000,71 @@ export default function App() {
   const listItem = (l: TaskList) => {
     const navId: ViewId = `list:${l.id}`;
     const isDropCandidate = view !== navId && hasDropHintTask;
+    const dropPosition = listDropTarget?.kind === "list" &&
+      listDropTarget.listId === l.id ? listDropTarget.position : "";
     return (
       <div
         key={l.id}
-        className="sidebar-list-item"
+        className={`sidebar-list-item ${draggingListId === l.id ? "is-list-dragging" : ""} ${dropPosition ? `list-drop-${dropPosition}` : ""}`}
         onContextMenu={(e) => {
           e.preventDefault();
           setListDialog(l);
         }}
         onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("text/dida-list")) {
+            e.stopPropagation();
+            if (!draggingListId || draggingListId === l.id) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = "move";
+            const bounds = e.currentTarget.getBoundingClientRect();
+            setListDropTarget({
+              kind: "list",
+              listId: l.id,
+              position: e.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+            });
+            return;
+          }
+          if (!e.dataTransfer.types.includes("text/dida-task")) return;
           e.preventDefault();
           if (dragOverNav !== navId) setDragOverNav(navId);
         }}
-        onDragLeave={() => {
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
           if (dragOverNav === navId) setDragOverNav(null);
+          setListDropTarget((target) => target?.kind === "list" &&
+            target.listId === l.id ? null : target);
         }}
         onDrop={(e) => {
+          if (e.dataTransfer.types.includes("text/dida-list")) {
+            const bounds = e.currentTarget.getBoundingClientRect();
+            handleListDrop(e, {
+              kind: "list",
+              listId: l.id,
+              position: e.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+            });
+            return;
+          }
+          if (!e.dataTransfer.types.includes("text/dida-task")) return;
           e.preventDefault();
           handleSidebarDrop(navId, e.dataTransfer.getData("text/dida-task"));
         }}
       >
         <button
-          className={`sidebar-item ${view === navId ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === navId ? "drag-over" : ""}`}
+          className={`sidebar-item draggable-list ${view === navId ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === navId ? "drag-over" : ""}`}
+          draggable
+          title="拖动调整顺序或移入分组；双击可编辑清单"
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/dida-list", l.id);
+            e.dataTransfer.effectAllowed = "move";
+            setDraggingListId(l.id);
+            setDraggingTaskId(null);
+            setDragOverNav(null);
+            setListDropTarget(null);
+          }}
+          onDragEnd={() => {
+            setDraggingListId(null);
+            setListDropTarget(null);
+          }}
           onClick={() => go(navId)}
           onDoubleClick={() => setListDialog(l)}
           data-nav-id={navId}
@@ -1001,6 +1096,7 @@ export default function App() {
           setTagDialog({ mode: "edit", name: t });
         }}
         onDragOver={(e) => {
+          if (!e.dataTransfer.types.includes("text/dida-task")) return;
           e.preventDefault();
           if (dragOverNav !== navId) setDragOverNav(navId);
         }}
@@ -1008,6 +1104,7 @@ export default function App() {
           if (dragOverNav === navId) setDragOverNav(null);
         }}
         onDrop={(e) => {
+          if (!e.dataTransfer.types.includes("text/dida-task")) return;
           e.preventDefault();
           handleSidebarDrop(navId, e.dataTransfer.getData("text/dida-task"));
         }}
@@ -1167,8 +1264,11 @@ export default function App() {
             </div>
             <div className="sidebar-divider" />
             <div className="sidebar-scroll">
-              <div className="sidebar-section-heading">
-                <span>清单</span>
+              <div
+                className={`sidebar-section-heading list-root-heading ${listDropTarget?.kind === "group" && listDropTarget.folderId === null ? "list-group-drag-over" : ""}`}
+                {...listGroupDropProps(null)}
+              >
+                <span>{draggingListId ? "清单 · 不分组" : "清单"}</span>
                 <div>
                   <button
                     title="新建清单分组"
@@ -1186,22 +1286,35 @@ export default function App() {
                   </button>
                 </div>
               </div>
-              {data.lists
-                .filter((l) => l.id !== "inbox" && !l.folderId && !l.archived)
-                .sort((a, b) => a.sortOrder - b.sortOrder)
+              {orderedLists
+                .filter((l) => !l.folderId)
                 .map(listItem)}
               {data.folders.map((f) => (
                 <details className="sidebar-folder" key={f.id} open>
-                  <summary>
+                  <summary
+                    className={`${draggingListId ? "list-group-drop-candidate" : ""} ${listDropTarget?.kind === "group" && listDropTarget.folderId === f.id ? "list-group-drag-over" : ""}`}
+                    title="可将清单拖到这里归入分组"
+                    {...listGroupDropProps(f.id)}
+                  >
                     <ChevronRight size={12} />
                     <Folder size={16} />
                     <span>{f.name}</span>
+                    {listDropTarget?.kind === "group" && listDropTarget.folderId === f.id &&
+                      <small>移入</small>}
                   </summary>
-                  {data.lists
-                    .filter((l) => l.folderId === f.id && !l.archived)
+                  {orderedLists
+                    .filter((l) => l.folderId === f.id)
                     .map(listItem)}
                 </details>
               ))}
+              {draggingListId && (
+                <div
+                  className={`list-root-drop ${listDropTarget?.kind === "group" && listDropTarget.folderId === null ? "list-group-drag-over" : ""}`}
+                  {...listGroupDropProps(null)}
+                >
+                  放到清单顶层（不分组）
+                </div>
+              )}
               {data.lists.filter((l) => l.id !== "inbox" && !l.archived)
                 .length === 0 && (
                 <button
@@ -3462,6 +3575,7 @@ function NewTaskDialog({
             />
           </div>
         </div>
+        <TaskDateHint date={due || parseQuickInput(title, list).dueDate || null} />
         {error && (
           <p className="form-error" role="alert">
             {error}
@@ -3568,6 +3682,7 @@ function DateDialog({
             onChange={setDate}
           />
         </label>
+        <TaskDateHint date={date} />
         <div className="date-two-columns">
           <label>
             开始日期（可选）
