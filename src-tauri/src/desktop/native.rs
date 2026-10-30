@@ -24,6 +24,7 @@ use windows::{
         Graphics::{
             Direct2D::{Common::*, *},
             DirectWrite::*,
+            Dwm::*,
             Dxgi::Common::*,
             Gdi::*,
         },
@@ -285,6 +286,8 @@ struct Runtime {
     last_presentation: Option<(bool, bool)>,
     transition: Option<BarTransition>,
     motion_surface: Option<motion::Surface>,
+    static_redraw: bool,
+    show_after_layout: bool,
     motion_press: Option<(usize, POINT)>,
     ignore_reveal_at: Option<POINT>,
     panel_state: Panel,
@@ -303,6 +306,40 @@ struct WindowData {
 impl WindowData {
     unsafe fn flush(&self, hwnd: HWND) {
         unsafe {
+            // User32 paint callbacks must run after the Runtime borrow is gone.
+            // Otherwise our reentrancy guard validates them without drawing and
+            // the compositor can display an empty frame during the handoff.
+            let (bar, redraw, show, static_frame, surface) = {
+                let mut runtime = self.runtime.borrow_mut();
+                let redraw = std::mem::take(&mut runtime.static_redraw);
+                let show = std::mem::take(&mut runtime.show_after_layout);
+                let static_frame = runtime.transition.is_none();
+                let surface = if redraw && static_frame {
+                    runtime.motion_surface.take()
+                } else {
+                    None
+                };
+                (runtime.bar, redraw, show, static_frame, surface)
+            };
+            if redraw {
+                let style = GetWindowLongW(bar, GWL_EXSTYLE) as u32;
+                if static_frame && style & WS_EX_LAYERED.0 != 0 {
+                    SetWindowLongW(bar, GWL_EXSTYLE, (style & !WS_EX_LAYERED.0) as i32);
+                }
+                if show {
+                    let _ = ShowWindow(bar, SW_SHOWNOACTIVATE);
+                }
+                let _ = RedrawWindow(
+                    Some(bar),
+                    None,
+                    None,
+                    RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN | RDW_FRAME,
+                );
+            } else if show {
+                let _ = ShowWindow(bar, SW_SHOWNOACTIVATE);
+            }
+            // Keep the last layered pixels alive until the replacement is drawn.
+            drop(surface);
             let flags = self.deferred.replace(0);
             if flags != 0 {
                 let _ = PostMessageW(Some(hwnd), DEFERRED, WPARAM(flags as usize), LPARAM(0));
@@ -370,6 +407,8 @@ impl Runtime {
                     last_presentation: None,
                     transition: None,
                     motion_surface: None,
+                    static_redraw: false,
+                    show_after_layout: false,
                     motion_press: None,
                     ignore_reveal_at: None,
                     panel_state: Panel::None,
@@ -384,7 +423,15 @@ impl Runtime {
             let mut runtime_guard = owner.runtime.borrow_mut();
             let this = &mut *runtime_guard;
             this.bar = CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                // The diagnostic probe makes only this test window discoverable to
+                // desktop accessibility tools; production keeps a tool window.
+                if cfg!(any(debug_assertions, feature = "motion-diagnostics"))
+                    && std::env::args().any(|arg| arg == "--bar-ui-probe")
+                {
+                    WS_EX_APPWINDOW | WS_EX_TOPMOST
+                } else {
+                    WS_EX_TOOLWINDOW | WS_EX_TOPMOST
+                },
                 BAR_CLASS,
                 w!("DitaList · 悬浮栏"),
                 WS_POPUP | WS_CLIPCHILDREN,
@@ -398,6 +445,17 @@ impl Runtime {
                 Some(data),
             )
             .map_err(|e| e.to_string())?;
+            let disable = BOOL(1);
+            if let Err(error) = DwmSetWindowAttribute(
+                this.bar,
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                (&disable as *const BOOL).cast(),
+                std::mem::size_of::<BOOL>() as u32,
+            ) {
+                let _ = this.actions.send(DesktopAction::Error(format!(
+                    "悬浮栏系统转场设置失败：{error}"
+                )));
+            }
             this.panel = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
                 PANEL_CLASS,
@@ -496,7 +554,7 @@ impl Runtime {
             let _ = GetWindowRect(this.bar, &mut this.expanded_rect);
             this.layout();
             this.update_anchor();
-            let _ = ShowWindow(this.bar, SW_SHOWNOACTIVATE);
+            this.show_after_layout = true;
             let bar = this.bar;
             drop(runtime_guard);
             owner.flush(bar);
@@ -562,6 +620,10 @@ impl Runtime {
                         }
                     }
                     NativeCommand::InputActive(active) => {
+                        if active {
+                            let _ = ShowWindow(self.bar, SW_HIDE);
+                            self.show_after_layout = false;
+                        }
                         self.stop_transition();
                         self.input_active = active;
                         if active {
@@ -573,6 +635,10 @@ impl Runtime {
                         self.refresh(true);
                     }
                     NativeCommand::MainTransition(active) => {
+                        if active {
+                            let _ = ShowWindow(self.bar, SW_HIDE);
+                            self.show_after_layout = false;
+                        }
                         self.stop_transition();
                         self.main_transition = active;
                         if active {
@@ -661,12 +727,13 @@ impl Runtime {
             }
             if visible {
                 if !IsWindowVisible(self.bar).as_bool() {
-                    let _ = ShowWindow(self.bar, SW_SHOWNOACTIVATE);
+                    self.show_after_layout = true;
                 }
             } else {
+                self.show_after_layout = false;
+                let _ = ShowWindow(self.bar, SW_HIDE);
                 self.cancel_edge_hide();
                 self.stop_transition();
-                let _ = ShowWindow(self.bar, SW_HIDE);
                 self.hide_panel();
             }
             if redraw && !self.dragging {
@@ -766,6 +833,7 @@ impl Runtime {
 
     unsafe fn apply_bar_frame(&mut self, rect: RECT) {
         unsafe {
+            self.static_redraw = true;
             let scale = self.dpi / 96.;
             let _ = SetWindowPos(
                 self.bar,
@@ -774,7 +842,7 @@ impl Runtime {
                 rect.top,
                 rect.right - rect.left,
                 rect.bottom - rect.top,
-                SWP_NOACTIVATE,
+                SWP_NOACTIVATE | SWP_NOREDRAW,
             );
             self.round(
                 self.bar,
@@ -791,7 +859,7 @@ impl Runtime {
                         0,
                         (button.width * scale) as i32,
                         (40. * scale) as i32,
-                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOREDRAW,
                     );
                     let _ = InvalidateRect(Some(button.hwnd), None, false);
                 } else {
@@ -835,7 +903,7 @@ impl Runtime {
                 corner_diameter(width, height, scale * 96.),
             );
             // SetWindowRgn takes ownership on success.
-            if SetWindowRgn(hwnd, Some(region), true) == 0 {
+            if SetWindowRgn(hwnd, Some(region), hwnd != self.bar) == 0 {
                 let _ = DeleteObject(region.into());
             }
         }
@@ -873,11 +941,7 @@ impl Runtime {
         self.transition = None;
         unsafe {
             let _ = KillTimer(Some(self.bar), EDGE_ANIMATION_TIMER);
-            self.motion_surface = None;
-            let style = GetWindowLongW(self.bar, GWL_EXSTYLE) as u32;
-            if style & WS_EX_LAYERED.0 != 0 {
-                SetWindowLongW(self.bar, GWL_EXSTYLE, (style & !WS_EX_LAYERED.0) as i32);
-            }
+            self.static_redraw |= self.motion_surface.is_some();
         }
     }
 
@@ -923,6 +987,7 @@ impl Runtime {
             let (progress, complete) = motion.frame(Instant::now(), travel);
             let rect = transition_rect(line, full, progress);
             if complete {
+                let _ = self.paint_transition(rect, progress);
                 self.stop_transition();
                 self.apply_bar_frame(rect);
             } else if let Err(error) = self.paint_transition(rect, progress) {
@@ -952,13 +1017,21 @@ impl Runtime {
                     &self.buttons,
                     self.theme(),
                 )?;
+                // Prepare pixels while the old window is still intact. There
+                // must be no D2D allocation/drawing gap after changing styles.
+                surface.prepare(rect, progress)?;
                 self.motion_surface = Some(surface);
+                let style = GetWindowLongW(self.bar, GWL_EXSTYLE) as u32;
+                SetWindowLongW(self.bar, GWL_EXSTYLE, (style | WS_EX_LAYERED.0) as i32);
+                self.motion_surface
+                    .as_ref()
+                    .unwrap()
+                    .present_prepared(self.bar, rect)?;
                 for button in &self.buttons {
                     let _ = ShowWindow(button.hwnd, SW_HIDE);
                 }
                 let _ = SetWindowRgn(self.bar, None, false);
-                let style = GetWindowLongW(self.bar, GWL_EXSTYLE) as u32;
-                SetWindowLongW(self.bar, GWL_EXSTYLE, (style | WS_EX_LAYERED.0) as i32);
+                return Ok(());
             }
             self.motion_surface
                 .as_ref()
@@ -2055,6 +2128,9 @@ impl Renderer {
                 minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
             })?;
             let write: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            // Match the premultiplied transition canvas, preventing text from
+            // changing weight/color fringes on the final native frame.
+            target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             Ok(Self { target, write })
         }
     }

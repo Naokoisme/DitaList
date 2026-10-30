@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashSet,
     sync::{Arc, Mutex, mpsc},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -28,6 +28,10 @@ pub enum DesktopAction {
         state: &'static str,
         bounds: [i32; 4],
     },
+    MainMotionObservation {
+        phase: &'static str,
+        details: Value,
+    },
     Error(String),
 }
 
@@ -37,6 +41,7 @@ struct State {
     main_ready: bool,
     main_from_bar: bool,
     main_motion: Option<MainMotion>,
+    main_opening: Option<MainOpening>,
     after_quick: Option<AfterQuick>,
     quick_generation: u64,
     main_generation: u64,
@@ -63,6 +68,14 @@ struct MainMotion {
     id: u64,
     restore: MainFrame,
     prepared: bool,
+    source_painted: bool,
+    opening: MainOpening,
+}
+
+#[derive(Clone, Copy)]
+struct MainOpening {
+    requested: Instant,
+    source: &'static str,
 }
 
 struct Inner {
@@ -103,6 +116,7 @@ impl Desktop {
                     main_ready: false,
                     main_from_bar: false,
                     main_motion: None,
+                    main_opening: None,
                     after_quick: None,
                     quick_generation: 0,
                     main_generation: 0,
@@ -291,7 +305,11 @@ impl Desktop {
             "closeQuick" => self.close_quick(),
             "closeMain" => self.close_main(),
             "mainMotionPrepared" => self.main_motion_prepared(&payload),
+            "mainShellReady" => self.main_shell_ready(),
+            "mainMotionSourceFrame" => self.main_motion_source_frame(&payload),
+            "mainMotionFrame" => self.main_motion_frame(&payload),
             "mainMotionFinished" => self.finish_main_motion(&payload, true),
+            "mainMotionCancelled" => self.finish_main_motion(&payload, false),
             "ready" => self.ready(
                 payload
                     .get("window")
@@ -316,7 +334,15 @@ impl Desktop {
                 });
                 Ok(())
             }
-            "minimize" => self.window("main")?.minimize().map_err(|e| e.to_string()),
+            "minimize" => {
+                self.finish_main_motion(&Value::Null, false)?;
+                self.inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .main_opening = None;
+                self.window("main")?.minimize().map_err(|e| e.to_string())
+            }
             "maximize" => {
                 let window = self.window("main")?;
                 if window.is_maximized().map_err(|e| e.to_string())? {
@@ -366,6 +392,21 @@ impl Desktop {
             return Ok(());
         }
         let existing = self.inner.app.get_webview_window("main");
+        let visible = existing
+            .as_ref()
+            .is_some_and(|window| window.is_visible().unwrap_or(false));
+        let minimized = existing
+            .as_ref()
+            .is_some_and(|window| window.is_minimized().unwrap_or(false));
+        let source = if existing.is_none() {
+            "cold"
+        } else if minimized {
+            "minimized"
+        } else if visible {
+            "visible"
+        } else {
+            "retained"
+        };
         let navigation = if payload.get("view").and_then(Value::as_str).is_some() {
             Some(payload)
         } else if existing.is_none() {
@@ -378,8 +419,15 @@ impl Desktop {
         };
         {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
-            if existing.is_none() || (state.main_ready && state.main_motion.is_none()) {
+            if existing.is_none()
+                || state.main_opening.is_none()
+                || (state.main_ready && state.main_motion.is_none())
+            {
                 state.main_generation += 1;
+                state.main_opening = Some(MainOpening {
+                    requested: Instant::now(),
+                    source,
+                });
             }
             if state.main_motion.is_none() {
                 state.main_from_bar = from_bar;
@@ -388,6 +436,10 @@ impl Desktop {
                 state.navigation = navigation.clone();
             }
         }
+        self.observe_main_opening(
+            "requested",
+            json!({"fromBar":from_bar,"visible":visible,"minimized":minimized}),
+        );
         if let Some(window) = existing {
             if !self
                 .inner
@@ -427,6 +479,17 @@ impl Desktop {
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+        Self::with_main_hwnd(&window, |hwnd| unsafe {
+            use windows::Win32::Graphics::Dwm::*;
+            let disabled = 1i32;
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_TRANSITIONS_FORCEDISABLED,
+                &disabled as *const _ as _,
+                std::mem::size_of_val(&disabled) as u32,
+            )
+            .map_err(|e| e.to_string())
+        })?;
         Self::attach_close_handoff(&window, "main");
         self.creation_timeout("main");
         Ok(())
@@ -438,15 +501,29 @@ impl Desktop {
             if state.main_motion.is_some() {
                 return Ok(());
             }
+            if state.main_opening.is_none() {
+                return Ok(());
+            }
             std::mem::take(&mut state.main_from_bar)
         };
+        let minimized = window.is_minimized().map_err(|e| e.to_string())?;
+        let visible = window.is_visible().map_err(|e| e.to_string())?;
         if from_bar
             && self.floating_visible()
             && native::client_animations_enabled()
-            && !window.is_visible().unwrap_or(true)
-            && !window.is_minimized().unwrap_or(true)
+            && (minimized || !visible)
         {
-            match self.begin_main_motion(window) {
+            let motion = (|| {
+                if minimized {
+                    // Restoring an iconic HWND uses SW_RESTORE internally. Cloak
+                    // it until the new bar-sized source frame is ready to show.
+                    Self::set_main_cloaked(window, true)?;
+                    window.hide().map_err(|e| e.to_string())?;
+                    window.unminimize().map_err(|e| e.to_string())?;
+                }
+                self.begin_main_motion(window)
+            })();
+            match motion {
                 Ok(true) => return Ok(()),
                 Ok(false) => {}
                 Err(error) => {
@@ -457,12 +534,42 @@ impl Desktop {
                 }
             }
         }
+        Self::set_main_cloaked(window, false)?;
         self.inner
             .native
             .send(native::NativeCommand::HoldForMain(false));
         window.unminimize().map_err(|e| e.to_string())?;
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())
+    }
+
+    fn observe_main_opening(&self, phase: &'static str, extra: Value) {
+        let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(opening) = state.main_opening {
+            let _ = self
+                .inner
+                .actions
+                .send(DesktopAction::MainMotionObservation {
+                    phase,
+                    details: json!({"id":state.main_generation,"source":opening.source,
+                    "requestElapsedMs":opening.requested.elapsed().as_millis(),"frame":extra}),
+                });
+        }
+    }
+
+    fn main_shell_ready(&self) -> Result<(), String> {
+        self.observe_main_opening("shell_ready", Value::Null);
+        let should_present = {
+            let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            !state.main_ready
+                && state.main_from_bar
+                && state.main_motion.is_none()
+                && state.main_opening.is_some()
+        };
+        if should_present {
+            self.present_main(&self.window("main")?)?;
+        }
+        Ok(())
     }
 
     fn begin_main_motion(&self, window: &WebviewWindow) -> Result<bool, String> {
@@ -538,6 +645,11 @@ impl Desktop {
                 id,
                 restore,
                 prepared: false,
+                source_painted: false,
+                opening: state.main_opening.unwrap_or(MainOpening {
+                    requested: Instant::now(),
+                    source: "unknown",
+                }),
             });
             id
         };
@@ -556,13 +668,16 @@ impl Desktop {
         }
         let canvas = window.inner_position().map_err(|e| e.to_string())?;
         let scale = window.scale_factor().map_err(|e| e.to_string())?;
+        Self::clip_main_to_bar(window, anchor)?;
         let bar = {
             let state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             let snapshot = state.snapshot.as_ref();
             json!({
                 "today":snapshot.map(|s|s.today_count).unwrap_or(0),
                 "pending":snapshot.map(|s|s.pending_count).unwrap_or(0),
-                "reminders":snapshot.map(|s|s.reminder_count).unwrap_or(0)
+                "reminders":snapshot.map(|s|s.reminder_count).unwrap_or(0),
+                "theme":snapshot.map(|s|s.data.settings.theme.as_str()).unwrap_or("system"),
+                "accent":snapshot.map(|s|s.data.settings.accent.as_str()).unwrap_or("#4772fa")
             })
         };
         window.emit("desktop://main-motion", json!({
@@ -572,6 +687,7 @@ impl Desktop {
             "to":{"x":(target_position.x-canvas.x) as f64/scale,"y":(target_position.y-canvas.y) as f64/scale,
                 "width":target_size.width as f64/scale,"height":target_size.height as f64/scale}
         })).map_err(|e| e.to_string())?;
+        self.observe_main_opening("prepare_sent", Value::Null);
         let weak = Arc::downgrade(&self.inner);
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(3)).await;
@@ -601,30 +717,84 @@ impl Desktop {
         Ok(true)
     }
 
-    fn set_main_frame(window: &WebviewWindow, frame: MainFrame) -> Result<(), String> {
+    fn with_main_hwnd(
+        window: &WebviewWindow,
+        action: impl FnOnce(windows::Win32::Foundation::HWND) -> Result<(), String> + Send + 'static,
+    ) -> Result<(), String> {
         let handle = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
         let (sender, receiver) = mpsc::sync_channel(1);
         window
             .run_on_main_thread(move || {
-                use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::*};
-                let result = unsafe {
-                    SetWindowPos(
-                        HWND(handle as *mut std::ffi::c_void),
-                        None,
-                        frame.x,
-                        frame.y,
-                        frame.width as i32,
-                        frame.height as i32,
-                        SWP_NOZORDER | SWP_NOACTIVATE,
-                    )
-                }
-                .map_err(|e| e.to_string());
-                let _ = sender.send(result);
+                let _ = sender.send(action(windows::Win32::Foundation::HWND(
+                    handle as *mut std::ffi::c_void,
+                )));
             })
             .map_err(|e| e.to_string())?;
         receiver
             .recv_timeout(Duration::from_secs(2))
             .map_err(|e| e.to_string())?
+    }
+
+    fn set_main_frame(window: &WebviewWindow, frame: MainFrame) -> Result<(), String> {
+        Self::with_main_hwnd(window, move |hwnd| unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::*;
+            SetWindowPos(
+                hwnd,
+                None,
+                frame.x,
+                frame.y,
+                frame.width as i32,
+                frame.height as i32,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+            .map_err(|e| e.to_string())
+        })
+    }
+
+    fn set_main_cloaked(window: &WebviewWindow, cloaked: bool) -> Result<(), String> {
+        Self::with_main_hwnd(window, move |hwnd| unsafe {
+            use windows::Win32::Graphics::Dwm::*;
+            let value = i32::from(cloaked);
+            DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_CLOAK,
+                &value as *const _ as _,
+                std::mem::size_of_val(&value) as u32,
+            )
+            .map_err(|e| e.to_string())
+        })
+    }
+
+    fn clip_main_to_bar(window: &WebviewWindow, anchor: native::Anchor) -> Result<(), String> {
+        Self::with_main_hwnd(window, move |hwnd| unsafe {
+            use windows::Win32::{Foundation::RECT, Graphics::Gdi::*, UI::WindowsAndMessaging::*};
+            let mut bounds = RECT::default();
+            GetWindowRect(hwnd, &mut bounds).map_err(|e| e.to_string())?;
+            let radius = (16. * anchor.scale).round() as i32;
+            let region = CreateRoundRectRgn(
+                anchor.left.round() as i32 - bounds.left,
+                anchor.top.round() as i32 - bounds.top,
+                anchor.right.round() as i32 - bounds.left + 1,
+                anchor.bottom.round() as i32 - bounds.top + 1,
+                radius,
+                radius,
+            );
+            if SetWindowRgn(hwnd, Some(region), true) == 0 {
+                let _ = DeleteObject(region.into());
+                return Err(windows::core::Error::from_thread().to_string());
+            }
+            Ok(())
+        })
+    }
+
+    fn clear_main_clip(window: &WebviewWindow) -> Result<(), String> {
+        Self::with_main_hwnd(window, |hwnd| unsafe {
+            use windows::Win32::Graphics::Gdi::SetWindowRgn;
+            if SetWindowRgn(hwnd, None, true) == 0 {
+                return Err(windows::core::Error::from_thread().to_string());
+            }
+            Ok(())
+        })
     }
 
     fn main_motion_prepared(&self, payload: &Value) -> Result<(), String> {
@@ -644,14 +814,49 @@ impl Desktop {
         }
         let result = (|| {
             let window = self.window("main")?;
+            // A retained WebView may still have its last full-size DWM surface.
+            // Show only the source region, covered by the native bar, until the
+            // renderer confirms a freshly painted source frame.
+            window.show().map_err(|e| e.to_string())?;
+            Self::set_main_cloaked(&window, false)?;
+            window.set_focus().map_err(|e| e.to_string())?;
+            self.observe_main_opening("prepared", Value::Null);
+            window
+                .emit("desktop://main-motion", json!({"phase":"paint","id":id}))
+                .map_err(|e| e.to_string())
+        })();
+        if result.is_err() {
+            let _ = self.finish_main_motion(payload, true);
+        }
+        result
+    }
+
+    fn main_motion_source_frame(&self, payload: &Value) -> Result<(), String> {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or("缺少转场编号")?;
+        let frame = Self::motion_frame_details(payload)?;
+        {
+            let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(motion) = &mut state.main_motion else {
+                return Ok(());
+            };
+            if motion.id != id || !motion.prepared || motion.source_painted {
+                return Ok(());
+            }
+            motion.source_painted = true;
+        }
+        self.observe_main_opening("source_frame", frame);
+        let window = self.window("main")?;
+        let result = (|| {
+            Self::clear_main_clip(&window)?;
             self.inner
                 .native
                 .send(native::NativeCommand::MainTransition(true));
             self.inner
                 .native
                 .send(native::NativeCommand::HoldForMain(false));
-            window.show().map_err(|e| e.to_string())?;
-            window.set_focus().map_err(|e| e.to_string())?;
             window
                 .emit("desktop://main-motion", json!({"phase":"start","id":id}))
                 .map_err(|e| e.to_string())
@@ -662,7 +867,47 @@ impl Desktop {
         result
     }
 
+    fn main_motion_frame(&self, payload: &Value) -> Result<(), String> {
+        let id = payload
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or("缺少转场编号")?;
+        let valid = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .main_motion
+            .as_ref()
+            .is_some_and(|motion| motion.id == id && motion.source_painted);
+        if valid {
+            self.observe_main_opening("first_frame", Self::motion_frame_details(payload)?);
+        }
+        Ok(())
+    }
+
+    fn motion_frame_details(payload: &Value) -> Result<Value, String> {
+        let mut timing = serde_json::Map::new();
+        for key in [
+            "preparedAtMs",
+            "sourceFrameAtMs",
+            "startedAtMs",
+            "firstFrameAtMs",
+            "finishedAtMs",
+        ] {
+            if let Some(value) = payload.get(key) {
+                let number = value
+                    .as_f64()
+                    .filter(|v| v.is_finite() && *v >= 0.)
+                    .ok_or("转场时间字段无效")?;
+                timing.insert(key.to_owned(), json!(number));
+            }
+        }
+        Ok(Value::Object(timing))
+    }
+
     fn finish_main_motion(&self, payload: &Value, show: bool) -> Result<(), String> {
+        let frame = Self::motion_frame_details(payload)?;
         let motion = {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             if state.main_motion.as_ref().is_none_or(|motion| {
@@ -673,10 +918,16 @@ impl Desktop {
             }) {
                 return Ok(());
             }
+            if !show {
+                state.main_opening = None;
+            }
             state.main_motion.take().unwrap()
         };
+        let received_elapsed_ms = motion.opening.requested.elapsed().as_millis();
         let result = (|| {
             let window = self.window("main")?;
+            Self::clear_main_clip(&window)?;
+            Self::set_main_cloaked(&window, false)?;
             if !window.is_maximized().unwrap_or(false) {
                 Self::set_main_frame(&window, motion.restore)?;
             }
@@ -697,6 +948,15 @@ impl Desktop {
         self.inner
             .native
             .send(native::NativeCommand::HoldForMain(false));
+        let _ = self
+            .inner
+            .actions
+            .send(DesktopAction::MainMotionObservation {
+                phase: if result.is_ok() { "finished" } else { "failed" },
+                details: json!({"id":motion.id,"source":motion.opening.source,
+                "requestElapsedMs":motion.opening.requested.elapsed().as_millis(),
+                "receivedElapsedMs":received_elapsed_ms,"frame":frame,"shown":show}),
+            });
         result
     }
 
@@ -785,10 +1045,11 @@ impl Desktop {
                     .send(native::NativeCommand::InputActive(true));
             }
             "main" => {
-                let navigation = {
+                self.observe_main_opening("ready", Value::Null);
+                let (navigation, should_present) = {
                     let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
                     state.main_ready = true;
-                    state.navigation.clone()
+                    (state.navigation.clone(), state.main_opening.is_some())
                 };
                 let result = window
                     .emit("desktop://navigate", navigation)
@@ -799,7 +1060,11 @@ impl Desktop {
                         .send(native::NativeCommand::HoldForMain(false));
                     return Err(error);
                 }
-                return self.present_main(&window);
+                return if should_present {
+                    self.present_main(&window)
+                } else {
+                    Ok(())
+                };
             }
             _ => return Err("未知窗口".into()),
         }
@@ -870,18 +1135,23 @@ impl Desktop {
         let generation = {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             state.main_generation += 1;
+            state.main_opening = None;
             state.main_generation
         };
         let weak = Arc::downgrade(&self.inner);
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(Duration::from_secs(30)).await;
             if let Some(inner) = weak.upgrade() {
+                let _presentation = inner.presentation.lock().unwrap_or_else(|e| e.into_inner());
                 let release = {
                     let state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
                     !state.stopped && state.main_generation == generation
                 };
                 if release && let Some(window) = inner.app.get_webview_window("main") {
                     let _ = window.destroy();
+                    let mut state = inner.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.main_ready = false;
+                    state.main_opening = None;
                 }
             }
         });
@@ -1120,6 +1390,7 @@ impl Desktop {
             state.main_generation += 1;
             state.quick_generation += 1;
             state.main_motion = None;
+            state.main_opening = None;
             state.registered_shortcut.take()
         };
         if let Some(shortcut) = shortcut {

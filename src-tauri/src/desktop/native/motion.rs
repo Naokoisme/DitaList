@@ -14,7 +14,6 @@ pub(super) struct Surface {
     dpi_scale: f32,
     theme: Theme,
     fill: ID2D1SolidColorBrush,
-    border: ID2D1SolidColorBrush,
     ink: ID2D1SolidColorBrush,
     accent: ID2D1SolidColorBrush,
     labels: Vec<(f32, bool, IDWriteTextLayout)>,
@@ -36,7 +35,6 @@ impl Surface {
             let fill = renderer
                 .target
                 .CreateSolidColorBrush(&theme.surface, None)?;
-            let border = renderer.target.CreateSolidColorBrush(&theme.border, None)?;
             let ink = renderer.target.CreateSolidColorBrush(&theme.text, None)?;
             let accent = renderer.target.CreateSolidColorBrush(&theme.accent, None)?;
             let format = renderer.write.CreateTextFormat(
@@ -106,7 +104,6 @@ impl Surface {
                 dpi_scale,
                 theme,
                 fill,
-                border,
                 ink,
                 accent,
                 labels,
@@ -145,7 +142,6 @@ impl Surface {
                 b: 1. + (self.theme.surface.b - 1.) * p,
                 a: 1.,
             });
-            self.border.SetOpacity(p);
             let radius = (8. * self.dpi_scale)
                 .min(width as f32 / 2.)
                 .min(height as f32 / 2.);
@@ -160,17 +156,8 @@ impl Surface {
                 radiusY: radius,
             };
             target.FillRoundedRectangle(&shape, &self.fill);
-            let outline = D2D1_ROUNDED_RECT {
-                rect: D2D_RECT_F {
-                    left: 0.5,
-                    top: 0.5,
-                    right: width as f32 - 0.5,
-                    bottom: height as f32 - 0.5,
-                },
-                radiusX: (radius - 0.5).max(0.),
-                radiusY: (radius - 0.5).max(0.),
-            };
-            target.DrawRoundedRectangle(&outline, &self.border, 1., None);
+            // Static owner-drawn buttons cover the bar's whole client area;
+            // don't introduce an outline that disappears at the handoff.
 
             // One uniform content transform; never squash text or reveal it
             // through the old fixed-size child-window clipping rectangles.
@@ -203,11 +190,25 @@ impl Surface {
         progress: f32,
     ) -> windows::core::Result<()> {
         unsafe {
+            self.prepare(rect, progress)?;
+            self.present_prepared(hwnd, rect)
+        }
+    }
+
+    pub(super) unsafe fn prepare(&self, rect: RECT, progress: f32) -> windows::core::Result<()> {
+        unsafe { self.draw(rect.right - rect.left, rect.bottom - rect.top, progress) }
+    }
+
+    pub(super) unsafe fn present_prepared(
+        &self,
+        hwnd: HWND,
+        rect: RECT,
+    ) -> windows::core::Result<()> {
+        unsafe {
             let size = SIZE {
                 cx: rect.right - rect.left,
                 cy: rect.bottom - rect.top,
             };
-            self.draw(size.cx, size.cy, progress)?;
             UpdateLayeredWindow(
                 hwnd,
                 None,

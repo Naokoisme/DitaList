@@ -368,7 +368,7 @@ export default function App() {
     const keep = (cleanup: () => void) => canceled ? cleanup() : cleanups.push(cleanup);
     const report = (error: unknown) => { if (!canceled) setLoadError(errorMessage(error)); };
     void (async () => {
-      keep(await installMainMotion(report));
+      keep(await installMainMotion(report, () => !canceled));
       keep(await watchNavigation((intent) => {
         setWindowControlHover(null);
         if (intent.view) { setView(intent.view as ViewId); setSelectedId(null); }

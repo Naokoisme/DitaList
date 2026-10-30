@@ -114,6 +114,10 @@ impl Drop for LocalSubmission {
 }
 
 fn log_event(data_dir: &std::path::Path, event: &str, details: Value) {
+    // A JSON line is emitted through multiple writes by formatting. Serialize
+    // native/UI workers so startup and first-frame timing remains readable.
+    static LOG_WRITE: Mutex<()> = Mutex::new(());
+    let _guard = LOG_WRITE.lock().unwrap_or_else(|e| e.into_inner());
     if let Ok(mut file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -449,10 +453,12 @@ async fn backup_import(app: tauri::AppHandle) -> Result<Option<String>, CoreErro
         .map_err(|e| CoreError::new("io", e.to_string()))
 }
 
-// A debug-only launch path exercises the real bar-to-window host transition
-// without synthesizing mouse input; packaged builds never enable this probe.
+// Debug/explicit diagnostic builds can exercise the real bar-to-window path
+// without synthesizing input; normal candidate builds omit this probe.
 fn main_launch_intent(args: &[String]) -> Value {
-    if cfg!(debug_assertions) && args.iter().any(|arg| arg == "--motion-probe") {
+    if cfg!(any(debug_assertions, feature = "motion-diagnostics"))
+        && args.iter().any(|arg| arg == "--motion-probe")
+    {
         json!({"view":"today","fromBar":true})
     } else {
         Value::Null
@@ -521,11 +527,12 @@ fn main() {
                         DesktopAction::ReminderPresented(ids)=>{let a=handle.clone();tauri::async_runtime::spawn(async move{for id in ids{if let Err(e)=execute(a.clone(),CoreCommand{request_id:uuid::Uuid::new_v4().to_string(),operation:Operation::Reminder{id,action:"notified".into()}}).await{report_error(&a,&e);}}});},
                         DesktopAction::Error(message)=>report_error(&handle,&CoreError::new("desktop",message)),
                         DesktopAction::BarPresentation{state,bounds}=>log_event(&handle.state::<Host>().data_dir,"native_bar",json!({"state":state,"bounds":bounds})),
+                        DesktopAction::MainMotionObservation{phase,details}=>log_event(&handle.state::<Host>().data_dir,"main_motion",json!({"phase":phase,"details":details})),
                     }
                 }
             })?;
             let args = std::env::args().collect::<Vec<_>>();
-            if args.iter().any(|arg|arg=="--main" || (cfg!(debug_assertions) && arg=="--motion-probe")) {queue_main_launch(app.handle(),main_launch_intent(&args));}
+            if args.iter().any(|arg|arg=="--main" || (cfg!(any(debug_assertions, feature = "motion-diagnostics")) && arg=="--motion-probe")) {queue_main_launch(app.handle(),main_launch_intent(&args));}
             Ok(())
         });
     let app = builder
