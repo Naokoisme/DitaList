@@ -6,6 +6,7 @@ import {
   type CSSProperties,
   type DragEvent,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import {
   CalendarDays,
@@ -15,7 +16,7 @@ import {
   ChevronRight,
   Inbox,
   ListTodo,
-  Menu,
+  ListFilter,
   MoreHorizontal,
   Plus,
   Repeat2,
@@ -34,6 +35,9 @@ interface CalendarViewProps {
   onCreateTask: (date: string, endDate?: string, time?: string) => void;
   onMoveTask: (id: string, date: string, time?: string | null) => void;
   onToggleTask: (id: string) => void;
+  showBacklog: boolean;
+  onBacklogChange: (open: boolean) => void;
+  detailPanel?: ReactNode;
 }
 
 interface SpanEvent {
@@ -247,13 +251,14 @@ export default function CalendarView({
   onCreateTask,
   onMoveTask,
   onToggleTask,
+  showBacklog,
+  onBacklogChange,
+  detailPanel,
 }: CalendarViewProps) {
   const today = localDate(new Date());
-  const [desktopSidebar, setDesktopSidebar] = useState(true);
-  const [mobileSidebar, setMobileSidebar] = useState(false);
-  const [showBacklog, setShowBacklog] = useState(false);
-  const [showOptions, setShowOptions] = useState(false);
-  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [openPopover, setOpenPopover] = useState<"date" | "lists" | "options" | null>(null);
+  const [pickerMode, setPickerMode] = useState<"days" | "months">("days");
+  const [draggingBacklog, setDraggingBacklog] = useState(false);
   const [pickerYear, setPickerYear] = useState(() =>
     parseDate(anchor).getFullYear(),
   );
@@ -276,6 +281,7 @@ export default function CalendarView({
   const pointerStart = useRef<{ x: number; y: number } | null>(null);
   const optionsRef = useRef<HTMLDivElement>(null);
   const monthPickerRef = useRef<HTMLDivElement>(null);
+  const listPickerRef = useRef<HTMLDivElement>(null);
   const settingsWeekStart = data.settings.weekStart;
   const weekdays = Array.from(
     { length: 7 },
@@ -349,7 +355,7 @@ export default function CalendarView({
     );
     observer.observe(element);
     return () => observer.disconnect();
-  }, [mode, desktopSidebar, showBacklog]);
+  }, [mode]);
   useEffect(() => {
     if (mode === "day" || mode === "week")
       timeViewport.current?.scrollTo({
@@ -361,29 +367,31 @@ export default function CalendarView({
     return () => clearInterval(timer);
   }, []);
   useEffect(() => {
-    if (!showOptions) return;
-    const close = (event: PointerEvent) => {
-      if (!optionsRef.current?.contains(event.target as Node))
-        setShowOptions(false);
-    };
-    const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShowOptions(false);
-    };
-    document.addEventListener("pointerdown", close);
-    document.addEventListener("keydown", key);
+    if (!draggingBacklog) return;
+    const finish = () => setDraggingBacklog(false);
+    window.addEventListener("dragend", finish, true);
+    window.addEventListener("drop", finish, true);
     return () => {
-      document.removeEventListener("pointerdown", close);
-      document.removeEventListener("keydown", key);
+      window.removeEventListener("dragend", finish, true);
+      window.removeEventListener("drop", finish, true);
     };
-  }, [showOptions]);
+  }, [draggingBacklog]);
   useEffect(() => {
-    if (!showMonthPicker) return;
+    if (!openPopover) return;
+    const container = (openPopover === "date"
+      ? monthPickerRef
+      : openPopover === "lists"
+        ? listPickerRef
+        : optionsRef).current;
     const close = (event: PointerEvent) => {
-      if (!monthPickerRef.current?.contains(event.target as Node))
-        setShowMonthPicker(false);
+      if (!container?.contains(event.target as Node)) setOpenPopover(null);
     };
     const key = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setShowMonthPicker(false);
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setOpenPopover(null);
+        container?.querySelector<HTMLButtonElement>("button")?.focus();
+      }
     };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", key);
@@ -391,7 +399,7 @@ export default function CalendarView({
       document.removeEventListener("pointerdown", close);
       document.removeEventListener("keydown", key);
     };
-  }, [showMonthPicker]);
+  }, [openPopover]);
   useEffect(() => {
     const cancelHold = () => {
       if (holdTimer.current) clearTimeout(holdTimer.current);
@@ -456,6 +464,7 @@ export default function CalendarView({
     });
   }
   function move(step: number) {
+    setOpenPopover(null);
     onAnchorChange(
       mode === "day"
         ? addDays(anchor, step)
@@ -569,131 +578,22 @@ export default function CalendarView({
   ).filter((date) => tasks.some((task) => onDay(task, date)));
 
   return (
-    <div
-      className={`calendar-view ${desktopSidebar ? "" : "cal-desktop-sidebar-hidden"} ${mobileSidebar ? "cal-mobile-sidebar-open" : ""}`}
-    >
-      {mobileSidebar && (
-        <button
-          className="cal-sidebar-backdrop"
-          aria-label="关闭日历侧栏"
-          onClick={() => setMobileSidebar(false)}
-        />
-      )}
-      <aside className="cal-sidebar" aria-label="日历筛选">
-        <div className="cal-mini-heading">
-          <strong>
-            {parseDate(miniMonth).getFullYear()}年
-            {parseDate(miniMonth).getMonth() + 1}月
-          </strong>
-          <span>
-            <button
-              aria-label="小日历上个月"
-              onClick={() => setMiniMonth(addMonths(miniMonth, -1))}
-            >
-              <ChevronLeft size={15} />
-            </button>
-            <button
-              aria-label="小日历下个月"
-              onClick={() => setMiniMonth(addMonths(miniMonth, 1))}
-            >
-              <ChevronRight size={15} />
-            </button>
-          </span>
-        </div>
-        <div className="cal-mini-grid">
-          <div className="cal-mini-weekdays">
-            {weekdays.map((day) => (
-              <span key={day}>{DAY_NAMES[day]}</span>
-            ))}
-          </div>
-          <div className="cal-mini-dates">
-            {miniDates.map((date) => (
-              <button
-                key={date}
-                className={`${date.slice(0, 7) !== miniMonth.slice(0, 7) ? "cal-mini-outside" : ""} ${date === today ? "cal-mini-today" : ""} ${date === anchor ? "cal-mini-selected" : ""}`}
-                aria-label={date}
-                aria-current={date === today ? "date" : undefined}
-                onClick={() => {
-                  onAnchorChange(date);
-                  setMobileSidebar(false);
-                }}
-              >
-                <span>{parseDate(date).getDate()}</span>
-                {tasks.some(
-                  (task) => onDay(task, date) && !task.completedAt,
-                ) && <i />}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="cal-filter-heading">
-          <span>显示范围</span>
-          <button
-            onClick={() =>
-              setSelectedLists(selectedLists === null ? new Set() : null)
-            }
-          >
-            {selectedLists === null ? "取消全选" : "全选"}
-          </button>
-        </div>
-        <div className="cal-list-filters">
-          {lists.map((list) => (
-            <button
-              className="cal-list-filter"
-              key={list.id}
-              onClick={() => toggleList(list.id)}
-              aria-pressed={
-                selectedLists === null || selectedLists.has(list.id)
-              }
-            >
-              <span
-                className={`cal-filter-checkbox ${selectedLists === null || selectedLists.has(list.id) ? "is-checked" : ""}`}
-                style={{ "--list-color": list.color } as CSSProperties}
-              >
-                {(selectedLists === null || selectedLists.has(list.id)) && (
-                  <Check size={11} />
-                )}
-              </span>
-              {list.id === "inbox" ? (
-                <Inbox size={16} style={{ color: list.color }} />
-              ) : (
-                <ListTodo size={16} style={{ color: list.color }} />
-              )}
-              <span>{list.name}</span>
-            </button>
-          ))}
-        </div>
-        <div className="cal-sidebar-footer">
-          <span>
-            <span className="cal-offline-dot" />
-            本地日历
-          </span>
-          <span>双击日期添加任务</span>
-        </div>
-      </aside>
-
+    <div className="calendar-view">
       <section className="cal-main" aria-label="日历">
         <header className="cal-toolbar">
           <div className="cal-toolbar-left">
-            <button
-              className="cal-icon-button"
-              aria-label="切换日历侧栏"
-              onClick={() => {
-                if (window.matchMedia("(max-width: 700px)").matches)
-                  setMobileSidebar(!mobileSidebar);
-                else setDesktopSidebar(!desktopSidebar);
-              }}
-            >
-              <Menu size={18} />
-            </button>
             <div className="cal-title-picker" ref={monthPickerRef}>
               <button
                 type="button"
                 className="cal-title-picker-button"
-                aria-expanded={showMonthPicker}
+                aria-expanded={openPopover === "date"}
+                aria-haspopup="dialog"
+                aria-label="选择日期"
                 onClick={() => {
                   setPickerYear(anchorDate.getFullYear());
-                  setShowMonthPicker((v) => !v);
+                  setMiniMonth(monthStart(anchor));
+                  setPickerMode("days");
+                  setOpenPopover((value) => value === "date" ? null : "date");
                 }}
               >
                 <h1>{mainTitle}</h1>
@@ -708,72 +608,115 @@ export default function CalendarView({
                 onChange={(event) => {
                   if (/^\d{4}-\d{2}$/.test(event.target.value)) {
                     onAnchorChange(`${event.target.value}-01`);
-                    setShowMonthPicker(false);
+                    setOpenPopover(null);
                   }
                 }}
               />
-              {showMonthPicker && (
+              {openPopover === "date" && (
                 <div
                   className="cal-month-popover"
                   role="dialog"
-                  aria-label="选择年份与月份"
+                  aria-label="选择日历日期"
                 >
                   <div className="cal-month-popover-header">
                     <button
                       type="button"
                       className="cal-icon-button"
-                      aria-label="上一年"
-                      onClick={() => setPickerYear((y) => y - 1)}
+                      aria-label={pickerMode === "months" ? "上一年" : "小日历上个月"}
+                      onClick={() => pickerMode === "months"
+                        ? setPickerYear((year) => year - 1)
+                        : setMiniMonth(addMonths(miniMonth, -1))}
                     >
                       <ChevronLeft size={16} />
                     </button>
-                    <strong>{pickerYear}年</strong>
+                    <button
+                      type="button"
+                      className="cal-picker-heading"
+                      aria-label={pickerMode === "days" ? "选择年份与月份" : "返回日期选择"}
+                      onClick={() => {
+                        setPickerYear(parseDate(miniMonth).getFullYear());
+                        setPickerMode((value) => value === "days" ? "months" : "days");
+                      }}
+                    >
+                      {pickerMode === "months"
+                        ? `${pickerYear}年`
+                        : `${parseDate(miniMonth).getFullYear()}年${parseDate(miniMonth).getMonth() + 1}月`}
+                      <ChevronDown size={13} />
+                    </button>
                     <button
                       type="button"
                       className="cal-icon-button"
-                      aria-label="下一年"
-                      onClick={() => setPickerYear((y) => y + 1)}
+                      aria-label={pickerMode === "months" ? "下一年" : "小日历下个月"}
+                      onClick={() => pickerMode === "months"
+                        ? setPickerYear((year) => year + 1)
+                        : setMiniMonth(addMonths(miniMonth, 1))}
                     >
                       <ChevronRight size={16} />
                     </button>
                   </div>
-                  <div className="cal-month-popover-grid">
-                    {Array.from({ length: 12 }, (_, idx) => {
-                      const m = idx + 1;
-                      const ym = `${pickerYear}-${String(m).padStart(2, "0")}`;
-                      const selected = anchor.slice(0, 7) === ym;
-                      const current = today.slice(0, 7) === ym;
-                      return (
-                        <button
-                          type="button"
-                          key={m}
-                          className={`cal-month-cell ${selected ? "is-selected" : ""} ${current ? "is-current" : ""}`}
-                          onClick={() => {
-                            onAnchorChange(`${ym}-01`);
-                            setShowMonthPicker(false);
-                          }}
-                        >
-                          {m}月
-                        </button>
-                      );
-                    })}
-                  </div>
+                  {pickerMode === "months" ? (
+                    <div className="cal-month-popover-grid">
+                      {Array.from({ length: 12 }, (_, idx) => {
+                        const m = idx + 1;
+                        const ym = `${pickerYear}-${String(m).padStart(2, "0")}`;
+                        const selected = miniMonth.slice(0, 7) === ym;
+                        const current = today.slice(0, 7) === ym;
+                        return (
+                          <button
+                            type="button"
+                            key={m}
+                            className={`cal-month-cell ${selected ? "is-selected" : ""} ${current ? "is-current" : ""}`}
+                            onClick={() => {
+                              setMiniMonth(`${ym}-01`);
+                              onAnchorChange(`${ym}-01`);
+                              setPickerMode("days");
+                            }}
+                          >
+                            {m}月
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="cal-mini-grid">
+                      <div className="cal-mini-weekdays">
+                        {weekdays.map((day) => <span key={day}>{DAY_NAMES[day]}</span>)}
+                      </div>
+                      <div className="cal-mini-dates">
+                        {miniDates.map((date) => (
+                          <button
+                            key={date}
+                            className={`${date.slice(0, 7) !== miniMonth.slice(0, 7) ? "cal-mini-outside" : ""} ${date === today ? "cal-mini-today" : ""} ${date === anchor ? "cal-mini-selected" : ""}`}
+                            aria-label={date}
+                            aria-current={date === today ? "date" : undefined}
+                            onClick={() => {
+                              onAnchorChange(date);
+                              setOpenPopover(null);
+                            }}
+                          >
+                            <span>{parseDate(date).getDate()}</span>
+                            {tasks.some((task) => onDay(task, date) && !task.completedAt) && <i />}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="cal-month-popover-footer">
                     <button
                       type="button"
-                      onClick={() => setShowMonthPicker(false)}
+                      onClick={() => setOpenPopover(null)}
                     >
-                      取消
+                      关闭
                     </button>
                     <button
                       type="button"
                       className="is-primary"
                       onClick={() => {
                         onAnchorChange(today);
-                        setShowMonthPicker(false);
+                        setOpenPopover(null);
                       }}
                     >
-                      回到本月
+                      回到今天
                     </button>
                   </div>
                 </div>
@@ -782,7 +725,10 @@ export default function CalendarView({
             <div className="cal-navigation">
               <button
                 className="cal-today-button"
-                onClick={() => onAnchorChange(today)}
+                onClick={() => {
+                  onAnchorChange(today);
+                  setOpenPopover(null);
+                }}
               >
                 今天
               </button>
@@ -810,32 +756,84 @@ export default function CalendarView({
                     key={value}
                     className={mode === value ? "active" : ""}
                     aria-pressed={mode === value}
-                    onClick={() => onModeChange(value)}
+                    onClick={() => {
+                      setOpenPopover(null);
+                      onModeChange(value);
+                    }}
                   >
                     {MODE_NAMES[value]}
                   </button>
                 ),
               )}
             </div>
+            <div className="cal-list-picker" ref={listPickerRef}>
+              <button
+                className={`cal-toolbar-button ${openPopover === "lists" || selectedLists !== null ? "active" : ""}`}
+                aria-label="筛选日历清单"
+                aria-expanded={openPopover === "lists"}
+                aria-haspopup="dialog"
+                onClick={() => setOpenPopover((value) => value === "lists" ? null : "lists")}
+              >
+                <ListFilter size={16} />
+                <span>清单</span>
+                {selectedLists !== null && <small>{lists.filter((list) => selectedLists.has(list.id)).length}/{lists.length}</small>}
+              </button>
+              {openPopover === "lists" && (
+                <div className="cal-list-menu" role="dialog" aria-label="显示清单">
+                  <div className="cal-filter-heading">
+                    <span>显示清单</span>
+                    <button onClick={() => setSelectedLists(selectedLists === null ? new Set() : null)}>
+                      {selectedLists === null ? "取消全选" : "全选"}
+                    </button>
+                  </div>
+                  <div className="cal-list-filters">
+                    {lists.map((list) => (
+                      <button
+                        className="cal-list-filter"
+                        key={list.id}
+                        onClick={() => toggleList(list.id)}
+                        aria-pressed={selectedLists === null || selectedLists.has(list.id)}
+                      >
+                        <span
+                          className={`cal-filter-checkbox ${selectedLists === null || selectedLists.has(list.id) ? "is-checked" : ""}`}
+                          style={{ "--list-color": list.color } as CSSProperties}
+                        >
+                          {(selectedLists === null || selectedLists.has(list.id)) && <Check size={11} />}
+                        </span>
+                        {list.id === "inbox"
+                          ? <Inbox size={16} style={{ color: list.color }} />
+                          : <ListTodo size={16} style={{ color: list.color }} />}
+                        <span>{list.name}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <button
-              className={`cal-icon-button cal-arrange-button ${showBacklog ? "active" : ""}`}
+              className={`cal-toolbar-button cal-arrange-button ${showBacklog ? "active" : ""}`}
               aria-label="安排未设日期的任务"
               aria-pressed={showBacklog}
-              title="待安排任务"
-              onClick={() => setShowBacklog(!showBacklog)}
+              aria-expanded={showBacklog}
+              onClick={() => {
+                setOpenPopover(null);
+                onBacklogChange(!showBacklog);
+              }}
             >
-              <CalendarDays size={18} />
+              <Inbox size={16} />
+              <span>待安排</span>
+              <small>{backlog.length}</small>
             </button>
             <div className="cal-options" ref={optionsRef}>
               <button
                 className="cal-icon-button"
                 aria-label="日历显示设置"
-                aria-expanded={showOptions}
-                onClick={() => setShowOptions(!showOptions)}
+                aria-expanded={openPopover === "options"}
+                onClick={() => setOpenPopover((value) => value === "options" ? null : "options")}
               >
                 <MoreHorizontal size={20} />
               </button>
-              {showOptions && (
+              {openPopover === "options" && (
                 <div className="cal-options-menu">
                   <label>
                     <span>显示已完成</span>
@@ -857,17 +855,8 @@ export default function CalendarView({
                   </label>
                   <button
                     onClick={() => {
-                      setShowBacklog(!showBacklog);
-                      setShowOptions(false);
-                    }}
-                  >
-                    <span>待安排任务</span>
-                    {showBacklog && <Check size={15} />}
-                  </button>
-                  <button
-                    onClick={() => {
                       onCreateTask(anchor);
-                      setShowOptions(false);
+                      setOpenPopover(null);
                     }}
                   >
                     <span>添加任务</span>
@@ -1240,14 +1229,14 @@ export default function CalendarView({
             </div>
           )}
 
-          {showBacklog && (
-            <aside className="cal-backlog" aria-label="待安排任务">
+          {showBacklog && !detailPanel && (
+            <aside className={`cal-backlog ${draggingBacklog ? "is-dragging" : ""}`} aria-label="待安排任务">
               <div className="cal-backlog-heading">
                 <strong>待安排</strong>
                 <span>{backlog.length}</span>
                 <button
                   aria-label="关闭待安排"
-                  onClick={() => setShowBacklog(false)}
+                  onClick={() => onBacklogChange(false)}
                 >
                   <X size={16} />
                 </button>
@@ -1264,7 +1253,11 @@ export default function CalendarView({
                     className="cal-backlog-task"
                     key={task.id}
                     draggable
-                    onDragStart={(event) => dragStart(event, task)}
+                    onDragStart={(event) => {
+                      dragStart(event, task);
+                      setDraggingBacklog(true);
+                    }}
+                    onDragEnd={() => setDraggingBacklog(false)}
                   >
                     <button
                       className={`cal-agenda-check cal-priority-${task.priority}`}
@@ -1285,6 +1278,7 @@ export default function CalendarView({
               )}
             </aside>
           )}
+          {detailPanel && <div className="cal-detail-panel">{detailPanel}</div>}
         </div>
       </section>
     </div>

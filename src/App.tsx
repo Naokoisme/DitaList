@@ -239,6 +239,7 @@ export default function App() {
   const [anchor, setAnchor] = useState(localDate);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [calendarKey, setCalendarKey] = useState(0);
+  const [calendarBacklogOpen, setCalendarBacklogOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [settingsSection, setSettingsSection] = useState<
@@ -453,6 +454,7 @@ export default function App() {
   const go = useCallback((next: ViewId) => {
     setView(next);
     setSelectedId(null);
+    setCalendarBacklogOpen(false);
     setSidebarOpen(false);
     setContext(null);
   }, []);
@@ -477,6 +479,7 @@ export default function App() {
         setTagDialog(null);
         setContext(null);
         setSelectedId(null);
+        setCalendarBacklogOpen(false);
         setHelpOpen(false);
         setSidebarOpen(false);
         return;
@@ -1024,9 +1027,24 @@ export default function App() {
     );
   };
 
+  const taskDetailPanel = selected ? (
+    <TaskDetail
+      task={selected}
+      data={data}
+      onPatch={(patch) => patchTask(selected.id, patch)}
+      onToggle={() => toggle(selected.id)}
+      onClose={() => setSelectedId(null)}
+      onDate={() => setDateTask(selected)}
+      onTrash={() => trashTask(selected.id)}
+      onRestore={() => restoreTask(selected.id)}
+      onNewList={() => setListDialog("list")}
+      onToast={setToast}
+    />
+  ) : null;
+
   return (
     <div
-      className={`app-shell ${selected ? "detail-visible" : ""}`}
+      className={`app-shell ${selected && view !== "calendar" ? "detail-visible" : ""}`}
       onClick={() => {
         if (context) setContext(null);
       }}
@@ -1269,6 +1287,12 @@ export default function App() {
             data={data}
             anchor={anchor}
             mode={data.settings.calendarMode}
+            showBacklog={calendarBacklogOpen}
+            onBacklogChange={(open) => {
+              setCalendarBacklogOpen(open);
+              if (open) setSelectedId(null);
+            }}
+            detailPanel={taskDetailPanel}
             onAnchorChange={setAnchor}
             onModeChange={(mode) =>
               update((s) => ({
@@ -1276,7 +1300,10 @@ export default function App() {
                 settings: { ...s.settings, calendarMode: mode },
               }))
             }
-            onSelectTask={setSelectedId}
+            onSelectTask={(id) => {
+              setCalendarBacklogOpen(false);
+              setSelectedId(id);
+            }}
             onCreateTask={(date, endDate, time) =>
               setCreateDialog({ date, endDate, time })
             }
@@ -1606,20 +1633,7 @@ export default function App() {
           </div>
         )}
       </main>
-      {selected && (
-        <TaskDetail
-          task={selected}
-          data={data}
-          onPatch={(patch) => patchTask(selected.id, patch)}
-          onToggle={() => toggle(selected.id)}
-          onClose={() => setSelectedId(null)}
-          onDate={() => setDateTask(selected)}
-          onTrash={() => trashTask(selected.id)}
-          onRestore={() => restoreTask(selected.id)}
-          onNewList={() => setListDialog("list")}
-          onToast={setToast}
-        />
-      )}
+      {view !== "calendar" && taskDetailPanel}
 
       {context && (
         <div

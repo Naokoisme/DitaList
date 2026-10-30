@@ -137,9 +137,10 @@ async function targetedBrowserCases(today, month) {
     await navigation('日历').click();
     await page.locator('.cal-title-picker-button').click();
     await page.locator('.cal-month-popover').waitFor();
-    await page.locator('.cal-month-popover-footer').getByRole('button', { name: '回到本月', exact: true }).click();
+    await page.locator('.cal-month-popover-footer').getByRole('button', { name: '回到今天', exact: true }).click();
     await page.getByLabel('选择日历月份', { exact: true }).fill(month);
     assert.equal(await page.locator('input[type="month"], input[type="date"], input[type="time"]').count(), 0);
+    await page.getByRole('button', { name: '选择日期', exact: true }).click();
     await page.locator(`.cal-mini-dates button[aria-label="${month}-01"]`).click();
     await page.getByRole('group', { name: '日历视图' }).getByRole('button', { name: '日', exact: true }).click();
     const ninthHour = page.locator('.cal-time-column').first().locator('.cal-hour-cell').nth(9);
@@ -172,6 +173,7 @@ async function targetedBrowserCases(today, month) {
   });
   await step('跨日新建拒绝倒序日期且保留有效输入', async () => {
     await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '选择日期', exact: true }).click();
     await page.locator(`.cal-mini-dates button[aria-label="${month}-01"]`).click();
     await page.getByRole('group', { name: '日历视图' }).getByRole('button', { name: '月', exact: true }).click();
     await page.getByLabel('选择日历月份', { exact: true }).fill(month);
@@ -329,7 +331,9 @@ try {
     const title = page.locator('.cal-title-picker h1'); const before = await title.textContent();
     await page.getByRole('button', { name: '下一个日历周期', exact: true }).click(); assert.notEqual(await title.textContent(), before);
     await page.getByRole('button', { name: '上一个日历周期', exact: true }).click(); assert.equal(await title.textContent(), before);
+    await page.getByRole('button', { name: '筛选日历清单', exact: true }).click();
     const filter = page.locator('.cal-list-filter').filter({ hasText: '产品计划' }); await filter.click(); assert.equal(await page.locator('.cal-event').filter({ hasText: '核对原版月视图' }).count(), 0); await filter.click();
+    await page.getByRole('button', { name: '筛选日历清单', exact: true }).click();
     const event = page.locator('.cal-event').filter({ hasText: '核对原版月视图' }).first();
     const target = page.locator(`.cal-day[data-date="${month}-20"]`); const bounds = await target.boundingBox();
     await event.dragTo(target, { targetPosition: { x: bounds.width / 2, y: bounds.height - 12 } });
