@@ -23,6 +23,10 @@ pub enum DesktopAction {
     Wake,
     Quit,
     ReminderPresented(Vec<String>),
+    BarPresentation {
+        state: &'static str,
+        bounds: [i32; 4],
+    },
     Error(String),
 }
 

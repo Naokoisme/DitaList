@@ -39,6 +39,8 @@
 
 窗口无预建 WebView。原生栏 default40x180 DIP，输入420至560 DIP；主窗口按原风格。核心快照推进原生计数，安静/输入/用户隐藏按草案分流。Tauri 最后窗口释放不退出；显式退出才结束后台。
 
+贴边后原生栏收为 4 DIP 细线，移入展开、移出 500ms 后收起。完整矩形独立于细线矩形，供数量／DPI 变化与快速输入定位使用；提醒面板、输入和拖动期间暂停收起。展开／细线／自由悬浮切换通过内部 `BarPresentation` 消息写入 `runtime.jsonl` 的 `native_bar` 事件，仅记录状态和窗口边界，不新增业务接口。
+
 ## 导航增量与失败终态
 
 `Settings.navigation` 缺省为空排序／隐藏；`NavigationUpdate` 一次提交 preferences 和 renames。标签互换、过滤器完整词、任务标签和导航键由核心原子改写。新建主窗使用 defaultView；已存活主窗没有显式导航时保持原视图。

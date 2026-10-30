@@ -499,6 +499,7 @@ fn main() {
                         DesktopAction::Wake=>handle.state::<Host>().wake.notify_one(),
                         DesktopAction::ReminderPresented(ids)=>{let a=handle.clone();tauri::async_runtime::spawn(async move{for id in ids{if let Err(e)=execute(a.clone(),CoreCommand{request_id:uuid::Uuid::new_v4().to_string(),operation:Operation::Reminder{id,action:"notified".into()}}).await{report_error(&a,&e);}}});},
                         DesktopAction::Error(message)=>report_error(&handle,&CoreError::new("desktop",message)),
+                        DesktopAction::BarPresentation{state,bounds}=>log_event(&handle.state::<Host>().data_dir,"native_bar",json!({"state":state,"bounds":bounds})),
                     }
                 }
             })?;

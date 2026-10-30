@@ -15,6 +15,7 @@ use std::{
         mpsc,
     },
     thread,
+    time::{Duration, Instant},
 };
 use windows::{
     Win32::{
@@ -39,9 +40,13 @@ use windows::{
 
 const UPDATE: u32 = WM_APP + 41;
 const DEFERRED: u32 = WM_APP + 42;
+const POINTER_CHANGED: u32 = WM_APP + 43;
 const REDRAW: u32 = 1;
 const RELAYOUT: u32 = 2;
 const DRAIN: u32 = 4;
+const CHECK_POINTER: u32 = 8;
+const COLLAPSE: u32 = 16;
+const EDGE_HIDE_TIMER: usize = 2;
 const BAR_CLASS: PCWSTR = w!("DitaListRust.NativeBar");
 const PANEL_CLASS: PCWSTR = w!("DitaListRust.ReminderPanel");
 const DRAG: usize = 10;
@@ -247,6 +252,10 @@ struct Runtime {
     input_active: bool,
     dragging: bool,
     dock: Dock,
+    collapsed: bool,
+    expanded_rect: RECT,
+    edge_hide_due: Option<Instant>,
+    last_presentation: Option<(bool, bool)>,
     panel_state: Panel,
     panel_painted: bool,
     presented: HashSet<(String, String)>,
@@ -288,7 +297,13 @@ impl Runtime {
             let cursor = LoadCursorW(None, IDC_ARROW).map_err(|e| e.to_string())?;
             for class in [BAR_CLASS, PANEL_CLASS] {
                 let wc = WNDCLASSW {
-                    style: CS_HREDRAW | CS_VREDRAW | CS_DROPSHADOW,
+                    style: CS_HREDRAW
+                        | CS_VREDRAW
+                        | if class == PANEL_CLASS {
+                            CS_DROPSHADOW
+                        } else {
+                            WNDCLASS_STYLES(0)
+                        },
                     lpfnWndProc: Some(window_proc),
                     hInstance: instance,
                     hCursor: cursor,
@@ -316,6 +331,10 @@ impl Runtime {
                     input_active: false,
                     dragging: false,
                     dock: Dock::default(),
+                    collapsed: false,
+                    expanded_rect: RECT::default(),
+                    edge_hide_due: None,
+                    last_presentation: None,
                     panel_state: Panel::None,
                     panel_painted: false,
                     presented: HashSet::new(),
@@ -367,10 +386,11 @@ impl Runtime {
                 this.buttons
                     .push(Self::button(this.bar, instance, id, label, width)?);
             }
-            let drag = this.buttons.iter().find(|b| b.id == DRAG).unwrap().hwnd;
-            SetWindowSubclass(drag, Some(drag_proc), 1, 0)
-                .ok()
-                .map_err(|e| e.to_string())?;
+            for button in &this.buttons {
+                SetWindowSubclass(button.hwnd, Some(button_proc), 1, button.id)
+                    .ok()
+                    .map_err(|e| e.to_string())?;
+            }
             for (id, label, width) in [
                 (ACK, "知道了", 86.),
                 (SNOOZE, "稍后 10 分钟", 116.),
@@ -436,6 +456,7 @@ impl Runtime {
                 (40. * scale) as i32,
                 SWP_NOACTIVATE,
             );
+            let _ = GetWindowRect(this.bar, &mut this.expanded_rect);
             this.layout();
             this.update_anchor();
             let _ = ShowWindow(this.bar, SW_SHOWNOACTIVATE);
@@ -505,6 +526,9 @@ impl Runtime {
                         self.input_active = active;
                         if active {
                             self.hide_panel();
+                            self.cancel_edge_hide();
+                        } else if self.dock.is_docked() {
+                            self.collapsed = true;
                         }
                         self.refresh(true);
                     }
@@ -512,6 +536,9 @@ impl Runtime {
                     NativeCommand::BeginDrag { x, y } => {
                         if GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 {
                             self.dock = Dock::default();
+                            self.collapsed = false;
+                            self.cancel_edge_hide();
+                            self.layout();
                             let _ = SetWindowPos(
                                 self.bar,
                                 Some(HWND_TOPMOST),
@@ -521,6 +548,9 @@ impl Runtime {
                                 0,
                                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
                             );
+                            // WM_MOVE can reenter while drain holds the Runtime
+                            // borrow, so preserve this move before refresh lays out.
+                            self.update_anchor();
                             let _ = ReleaseCapture();
                             let mut point = POINT::default();
                             let _ = GetCursorPos(&mut point);
@@ -571,6 +601,7 @@ impl Runtime {
                     let _ = ShowWindow(self.bar, SW_SHOWNOACTIVATE);
                 }
             } else {
+                self.cancel_edge_hide();
                 let _ = ShowWindow(self.bar, SW_HIDE);
                 self.hide_panel();
             }
@@ -614,7 +645,7 @@ impl Runtime {
                     PENDING => format!("Agent 待确认 {pending} 项"),
                     REMINDERS => format!("到时提醒 {reminders} 项"),
                     ADD => "快速添加任务".into(),
-                    DRAG => "拖动悬浮栏，靠近屏幕边缘自动吸附".into(),
+                    DRAG => "拖到屏幕边缘收成细线，移入展开；拖离边缘恢复悬浮".into(),
                     _ => button.label.clone(),
                 };
                 let label = wide(&accessible);
@@ -635,41 +666,82 @@ impl Runtime {
                     Some(LPARAM((&info) as *const _ as isize)),
                 );
                 if shown {
-                    let _ = SetWindowPos(
-                        button.hwnd,
-                        None,
-                        (x * scale) as i32,
-                        0,
-                        (button.width * scale) as i32,
-                        (40. * scale) as i32,
-                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                    );
+                    if self.collapsed {
+                        let _ = ShowWindow(button.hwnd, SW_HIDE);
+                    } else {
+                        let _ = SetWindowPos(
+                            button.hwnd,
+                            None,
+                            (x * scale) as i32,
+                            0,
+                            (button.width * scale) as i32,
+                            (40. * scale) as i32,
+                            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                        );
+                    }
                     x += button.width;
                 } else {
                     let _ = ShowWindow(button.hwnd, SW_HIDE);
                 }
                 let _ = InvalidateRect(Some(button.hwnd), None, false);
             }
-            let mut rect = RECT::default();
-            let _ = GetWindowRect(self.bar, &mut rect);
             let width = (x * scale) as i32;
             let height = (40. * scale) as i32;
             let work = work_area(self.bar);
-            let position = self.dock.position(rect, width, height, work, self.dpi);
+            let position = self.dock.position(self.expanded_rect, width, height, work);
+            self.expanded_rect = RECT {
+                left: position.x,
+                top: position.y,
+                right: position.x + width,
+                bottom: position.y + height,
+            };
+            let rect = if self.collapsed {
+                self.dock.collapsed_rect(self.expanded_rect, work, self.dpi)
+            } else {
+                self.expanded_rect
+            };
             let _ = SetWindowPos(
                 self.bar,
                 Some(HWND_TOPMOST),
-                position.x,
-                position.y,
-                width,
-                height,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
                 SWP_NOACTIVATE,
             );
-            self.round(self.bar, width, height, scale);
+            if self.dock.is_docked() {
+                // The screen edge must remain hit-testable all the way to the
+                // handle; rounded clipping here can cause reveal/hide flicker.
+                SetWindowRgn(self.bar, None, true);
+            } else {
+                self.round(self.bar, width, height, scale);
+            }
+            let _ = SetWindowTextW(
+                self.bar,
+                if self.collapsed {
+                    w!("DitaList · 贴边细线，移入展开")
+                } else {
+                    w!("DitaList · 悬浮栏")
+                },
+            );
             let _ = InvalidateRect(Some(self.bar), None, false);
             self.position_panel();
             self.update_anchor();
             let _ = InvalidateRect(Some(self.panel), None, false);
+            let presentation = (self.dock.is_docked(), self.collapsed);
+            if self.last_presentation != Some(presentation) {
+                self.last_presentation = Some(presentation);
+                let _ = self.actions.send(DesktopAction::BarPresentation {
+                    state: if self.collapsed {
+                        "edge"
+                    } else if self.dock.is_docked() {
+                        "expanded"
+                    } else {
+                        "floating"
+                    },
+                    bounds: [rect.left, rect.top, rect.right, rect.bottom],
+                });
+            }
         }
     }
 
@@ -690,10 +762,12 @@ impl Runtime {
         }
     }
 
-    unsafe fn update_anchor(&self) {
+    unsafe fn update_anchor(&mut self) {
         unsafe {
-            let mut rect = RECT::default();
-            let _ = GetWindowRect(self.bar, &mut rect);
+            if !self.collapsed {
+                let _ = GetWindowRect(self.bar, &mut self.expanded_rect);
+            }
+            let rect = self.expanded_rect;
             let work = work_area(self.bar);
             *self.anchor.lock().unwrap_or_else(|e| e.into_inner()) = Anchor {
                 right: rect.right as f64,
@@ -704,6 +778,68 @@ impl Runtime {
                 work_width: (work.right - work.left) as f64,
                 work_bottom: work.bottom as f64,
             };
+        }
+    }
+
+    unsafe fn cancel_edge_hide(&mut self) {
+        self.edge_hide_due = None;
+        unsafe {
+            let _ = KillTimer(Some(self.bar), EDGE_HIDE_TIMER);
+        }
+    }
+
+    fn can_collapse(&self) -> bool {
+        self.dock.is_docked()
+            && !self.collapsed
+            && !self.dragging
+            && !self.input_active
+            && matches!(self.panel_state, Panel::None)
+    }
+
+    unsafe fn schedule_edge_hide(&mut self) {
+        unsafe {
+            self.cancel_edge_hide();
+            if self.can_collapse() && IsWindowVisible(self.bar).as_bool() {
+                self.edge_hide_due = Some(Instant::now() + Duration::from_millis(500));
+                SetTimer(Some(self.bar), EDGE_HIDE_TIMER, 500, None);
+            }
+        }
+    }
+
+    unsafe fn reveal(&mut self) {
+        unsafe {
+            self.cancel_edge_hide();
+            if self.collapsed && !self.input_active {
+                self.collapsed = false;
+                self.layout();
+            }
+        }
+    }
+
+    unsafe fn pointer_changed(&mut self) {
+        unsafe {
+            if cursor_inside(self.bar) {
+                self.reveal();
+            } else {
+                self.schedule_edge_hide();
+            }
+        }
+    }
+
+    unsafe fn collapse_if_idle(&mut self) {
+        unsafe {
+            if self.edge_hide_due.is_none_or(|due| Instant::now() < due) {
+                return;
+            }
+            // A single delayed check, never an idle polling timer. A later
+            // WM_MOUSELEAVE will arm a fresh check if the cursor returned.
+            self.cancel_edge_hide();
+            let capture = GetCapture();
+            let interacting = capture == self.bar || IsChild(self.bar, capture).as_bool();
+            if self.can_collapse() && !interacting && !cursor_inside(self.bar) {
+                self.collapsed = true;
+                self.layout();
+            }
         }
     }
 
@@ -731,6 +867,7 @@ impl Runtime {
 
     unsafe fn show_panel(&mut self, automatic: bool) {
         unsafe {
+            self.reveal();
             self.panel_painted = false;
             self.position_panel();
             let title = wide(&self.panel_text().1);
@@ -764,6 +901,7 @@ impl Runtime {
             let _ = KillTimer(Some(self.panel), 1);
             let _ = ShowWindow(self.panel, SW_HIDE);
             self.panel_state = Panel::None;
+            self.schedule_edge_hide();
         }
     }
 
@@ -938,6 +1076,7 @@ impl Runtime {
 
     unsafe fn context_menu(&mut self) {
         unsafe {
+            self.cancel_edge_hide();
             let Ok(menu) = CreatePopupMenu() else {
                 return;
             };
@@ -1006,6 +1145,7 @@ impl Runtime {
                 }
                 _ => {}
             }
+            self.schedule_edge_hide();
         }
     }
 
@@ -1019,16 +1159,21 @@ impl Runtime {
             let panel = hwnd == self.panel;
             let first_paint = panel && !self.panel_painted;
             let (title, body) = self.panel_text();
-            if let Err(error) = self.renderer.surface(
-                hdc,
-                rect,
-                self.dpi / 96.,
-                &theme,
-                None,
-                panel.then_some((&title, &body)),
-                false,
-                false,
-            ) {
+            let result = if !panel && self.collapsed {
+                self.renderer.edge_line(hdc, rect, &theme)
+            } else {
+                self.renderer.surface(
+                    hdc,
+                    rect,
+                    self.dpi / 96.,
+                    &theme,
+                    None,
+                    panel.then_some((&title, &body)),
+                    false,
+                    false,
+                )
+            };
+            if let Err(error) = result {
                 let _ = self
                     .actions
                     .send(DesktopAction::Error(format!("原生绘制失败：{error}")));
@@ -1127,6 +1272,9 @@ unsafe extern "system" fn window_proc(
             message,
             UPDATE
                 | DEFERRED
+                | POINTER_CHANGED
+                | WM_MOUSEMOVE
+                | WM_MOUSELEAVE
                 | WM_PAINT
                 | WM_ERASEBKGND
                 | WM_DRAWITEM
@@ -1152,6 +1300,8 @@ unsafe extern "system" fn window_proc(
             let flags = match message {
                 UPDATE => DRAIN,
                 DEFERRED => wparam.0 as u32,
+                POINTER_CHANGED | WM_MOUSEMOVE | WM_MOUSELEAVE => CHECK_POINTER,
+                WM_TIMER if wparam.0 == EDGE_HIDE_TIMER => COLLAPSE,
                 WM_PAINT => {
                     let mut paint = PAINTSTRUCT::default();
                     BeginPaint(hwnd, &mut paint);
@@ -1188,6 +1338,12 @@ unsafe extern "system" fn window_proc(
                     runtime.dpi = GetDpiForWindow(runtime.bar).max(96) as f32;
                     runtime.layout();
                 }
+                if flags & CHECK_POINTER != 0 {
+                    runtime.pointer_changed();
+                }
+                if flags & COLLAPSE != 0 {
+                    runtime.collapse_if_idle();
+                }
                 if flags & REDRAW != 0 {
                     let _ = InvalidateRect(Some(runtime.bar), None, false);
                     let _ = InvalidateRect(Some(runtime.panel), None, false);
@@ -1199,6 +1355,17 @@ unsafe extern "system" fn window_proc(
             }
             UPDATE => {
                 runtime.drain();
+                LRESULT(0)
+            }
+            WM_MOUSEMOVE => {
+                if hwnd == runtime.bar {
+                    track_mouse_leave(hwnd);
+                    runtime.reveal();
+                }
+                DefWindowProcW(hwnd, message, wparam, lparam)
+            }
+            POINTER_CHANGED | WM_MOUSELEAVE => {
+                runtime.pointer_changed();
                 LRESULT(0)
             }
             WM_PAINT => {
@@ -1239,19 +1406,26 @@ unsafe extern "system" fn window_proc(
                 LRESULT(0)
             }
             WM_TIMER => {
-                let mut cursor = POINT::default();
-                let _ = GetCursorPos(&mut cursor);
-                let mut rect = RECT::default();
-                let _ = GetWindowRect(runtime.panel, &mut rect);
-                let hovered = cursor.x >= rect.left
-                    && cursor.x < rect.right
-                    && cursor.y >= rect.top
-                    && cursor.y < rect.bottom;
-                let active = GetForegroundWindow() == runtime.panel;
-                if !hovered && !active {
-                    runtime.hide_panel();
+                if hwnd == runtime.bar && wparam.0 == EDGE_HIDE_TIMER {
+                    runtime.collapse_if_idle();
+                    LRESULT(0)
+                } else if hwnd == runtime.panel && wparam.0 == 1 {
+                    let mut cursor = POINT::default();
+                    let _ = GetCursorPos(&mut cursor);
+                    let mut rect = RECT::default();
+                    let _ = GetWindowRect(runtime.panel, &mut rect);
+                    let hovered = cursor.x >= rect.left
+                        && cursor.x < rect.right
+                        && cursor.y >= rect.top
+                        && cursor.y < rect.bottom;
+                    let active = GetForegroundWindow() == runtime.panel;
+                    if !hovered && !active {
+                        runtime.hide_panel();
+                    }
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, message, wparam, lparam)
                 }
-                LRESULT(0)
             }
             WM_ACTIVATE => {
                 if hwnd == runtime.panel && (wparam.0 & 0xffff) == WA_INACTIVE as usize {
@@ -1270,6 +1444,8 @@ unsafe extern "system" fn window_proc(
             }
             WM_ENTERSIZEMOVE => {
                 runtime.dragging = true;
+                runtime.cancel_edge_hide();
+                runtime.collapsed = false;
                 runtime.dock = Dock::default();
                 runtime.hide_panel();
                 LRESULT(0)
@@ -1279,6 +1455,8 @@ unsafe extern "system" fn window_proc(
                 let mut rect = RECT::default();
                 let _ = GetWindowRect(runtime.bar, &mut rect);
                 runtime.dock = Dock::after_drag(rect, work_area(runtime.bar), runtime.dpi);
+                runtime.expanded_rect = rect;
+                runtime.collapsed = runtime.dock.is_docked();
                 runtime.layout();
                 runtime.update_anchor();
                 LRESULT(0)
@@ -1294,15 +1472,18 @@ unsafe extern "system" fn window_proc(
                 if hwnd == runtime.bar {
                     runtime.dpi = (wparam.0 & 0xffff) as f32;
                     let rect = &*(lparam.0 as *const RECT);
-                    let _ = SetWindowPos(
-                        hwnd,
-                        None,
-                        rect.left,
-                        rect.top,
-                        rect.right - rect.left,
-                        rect.bottom - rect.top,
-                        SWP_NOZORDER | SWP_NOACTIVATE,
-                    );
+                    if !runtime.collapsed {
+                        runtime.expanded_rect = *rect;
+                        let _ = SetWindowPos(
+                            hwnd,
+                            None,
+                            rect.left,
+                            rect.top,
+                            rect.right - rect.left,
+                            rect.bottom - rect.top,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
                     runtime.layout();
                 }
                 LRESULT(0)
@@ -1344,22 +1525,39 @@ unsafe extern "system" fn window_proc(
     }
 }
 
-unsafe extern "system" fn drag_proc(
+unsafe extern "system" fn button_proc(
     hwnd: HWND,
     message: u32,
     wparam: WPARAM,
     lparam: LPARAM,
     _id: usize,
-    _data: usize,
+    id: usize,
 ) -> LRESULT {
     unsafe {
-        if message == WM_LBUTTONDOWN {
+        if matches!(
+            message,
+            WM_MOUSEMOVE | WM_MOUSELEAVE | WM_LBUTTONUP | WM_CAPTURECHANGED
+        ) {
+            if message == WM_MOUSEMOVE {
+                track_mouse_leave(hwnd);
+            }
+            if let Ok(parent) = GetParent(hwnd) {
+                let _ = PostMessageW(Some(parent), POINTER_CHANGED, WPARAM(0), LPARAM(0));
+            }
+        }
+        if id == DRAG && message == WM_LBUTTONDOWN {
             let _ = SetFocus(Some(hwnd));
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
             // A click or small hand jitter is not a move gesture. DragDetect
             // uses the system threshold and consumes the matching release.
-            if !DragDetect(hwnd, point).as_bool() {
+            let dragging = DragDetect(hwnd, point).as_bool();
+            if let Ok(parent) = GetParent(hwnd) {
+                // DragDetect consumes a short click's release; the toolbar
+                // still needs a final pointer check after capture is released.
+                let _ = PostMessageW(Some(parent), POINTER_CHANGED, WPARAM(0), LPARAM(0));
+            }
+            if !dragging {
                 return LRESULT(0);
             }
             let _ = ReleaseCapture();
@@ -1376,6 +1574,30 @@ unsafe extern "system" fn drag_proc(
             return LRESULT(0);
         }
         DefSubclassProc(hwnd, message, wparam, lparam)
+    }
+}
+
+unsafe fn track_mouse_leave(hwnd: HWND) {
+    unsafe {
+        let _ = TrackMouseEvent(&mut TRACKMOUSEEVENT {
+            cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: hwnd,
+            ..Default::default()
+        });
+    }
+}
+
+unsafe fn cursor_inside(hwnd: HWND) -> bool {
+    unsafe {
+        let mut cursor = POINT::default();
+        let mut rect = RECT::default();
+        GetCursorPos(&mut cursor).is_ok()
+            && GetWindowRect(hwnd, &mut rect).is_ok()
+            && cursor.x >= rect.left
+            && cursor.x < rect.right
+            && cursor.y >= rect.top
+            && cursor.y < rect.bottom
     }
 }
 
@@ -1467,6 +1689,15 @@ struct Renderer {
     write: IDWriteFactory,
 }
 impl Renderer {
+    unsafe fn edge_line(&self, hdc: HDC, rect: RECT, theme: &Theme) -> windows::core::Result<()> {
+        unsafe {
+            self.target.BindDC(hdc, &rect)?;
+            self.target.BeginDraw();
+            self.target.Clear(Some(&theme.accent));
+            self.target.EndDraw(None, None)
+        }
+    }
+
     unsafe fn new() -> windows::core::Result<Self> {
         unsafe {
             let factory: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;

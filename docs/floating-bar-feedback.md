@@ -18,6 +18,8 @@
 
 ## 吸附行为
 
+以下是 `de3d620` 首次反馈候选的停靠实现；用户试用后要求收成细线，后文“贴边细线修正”替代这里的留白停靠行为。
+
 - 松手时，距当前显示器工作区边缘不超过 16 DIP 即吸附，留下 8 DIP 边距；角落可以同时吸附两个方向。DIP 随当前窗口 DPI 换算成物理像素。
 - 拖离边缘即可解除吸附。计数导致栏宽变化、DPI 和工作区变化时，已经吸附的边保持稳定；拖动中的计数更新不重新布局按钮。
 - 使用当前显示器的 `rcWork`，支持负坐标显示器，并按工作区限制位置；工作区已经扣除了任务栏。输入窗口伸展也补齐上、左、右、下的工作区限制。[GetMonitorInfoW](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getmonitorinfow)。
@@ -59,3 +61,20 @@
 本次 Computer Use 的 `sky.list_windows()` 与 `sky.list_apps()` 没有枚举原生工具栏／快速输入窗口。未使用模拟窗口替代原生栏，也未通过其他输入注入绕过窗口选择。原生单击、实际拖动吸附、混合 DPI 和多屏拔插仍缺少交互验收；上面的坐标测试不能代替这些验收。主会话开始桌面 UI 检查后，本会话停止了 UI 输入，避免抢占窗口。
 
 证据位于 `reports/floating-feedback-20261030/`：`native-tests.log`、`floating-grip-tests.log`、`desktop-clippy.log`、`frontend-build.log`、`release-build.log`、`fixed-binary.json`、`source-hashes.json`、`fixed-run.json`、`native-only-processes.json`、`fixed-exit.json`、`fixed-runtime.jsonl`，以及基线运行日志和前端浅／深色截图。上述专项候选只供本地集成验证，不是安装包或已发布版本；专项交付时的共享 `target/release/DitaListRust.exe` 使用临时验证标识，总集成须以正常标识重新构建。
+
+## 贴边细线修正
+
+用户对 `de3d620` 候选的补充反馈：“我想的是吸附到屏幕边缘变成一条细线”。这次交互为：
+
+- 靠近当前显示器工作区边缘 16 DIP 内松手，收成 4 DIP 主题色细线。上下为最长 64 DIP 的横线，左右为随栏高的竖线；角落只显示一条线，任务栏区域排除在外。
+- 鼠标移入细线，原地展开完整原生栏；移出约 500ms 后收回。完整栏紧贴工作区边界，不留下鼠标必须跨越的缝隙。
+- 按住拖柄拖离边缘后恢复自由悬浮。栏内按钮之间移动、按住按钮／拖柄、操作提醒、快速输入及拖动期间不收起；右键菜单期间暂停计时。
+- 提醒仍遵循已有规则临时展开，结束后收回。细线只是悬浮栏显示状态，不改写用户的显示开关或通知偏好。
+
+完整矩形独立缓存，避免隐藏后的窄矩形污染快捷输入锚点；顶部／底部细线在计数增长时保留中心。Web 拖动交接主动同步移动后的完整矩形，避免重入消息被延后时又回到旧位置。所有栏按钮跟踪鼠标离开，延迟到期重新核对当前位置和捕获；取消、过期和重新计时消息通过截止时间区分。
+
+实现使用 [TrackMouseEvent／WM_MOUSELEAVE](https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-mouseleave) 和 [SetTimer／KillTimer](https://learn.microsoft.com/en-us/windows/win32/winmsg/using-timers)。只有一次待执行的 500ms 检查，触发后取消；静止细线不需要轮询、动画、额外线程或 WebView。`runtime.jsonl` 的 `native_bar` 事件记录 `floating`／`expanded`／`edge` 状态及实际窗口矩形，便于核对实际使用路径。
+
+针对性检查：`cargo test --locked -p ditalist-desktop desktop::` 13 项通过，覆盖四边细线、DPI、负坐标显示器、角落、计数增长、极小工作区、原生按钮消息与既有提醒。严格 Clippy 通过。只读复核已核对鼠标捕获、窗口借用重入、定时消息乱序及输入交接；这些检查不替代实际鼠标交互。日志保留在 `reports/edge-autohide-20261030/`。
+
+实际 Tauri 隔离候选使用 `Naoko.DitaList.RustPreview.EdgeAutoHide` 和 `.local/edge-autohide/profile`：15:20 启动，进程树仅含宿主、WebView2 子进程为 0，运行日志成功记录原生栏 `floating` 状态和矩形；随后经自身 `--quit` 正常退出。测试期间已安装实例 PID 11072 始终保留，未覆盖程序或数据；快捷键占用日志来自该实例已有的注册。Computer Use 的 `list_windows`／`list_apps` 未返回隔离原生工具栏，未对用户正在使用的主窗口注入操作。细线显示、鼠标移入／移出、输入拖离及混合 DPI 的实际交互仍待用户覆盖安装验证。
