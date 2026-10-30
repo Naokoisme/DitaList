@@ -15,11 +15,11 @@
 | 设置、主题、快捷键、数据状态 | App、desktop | 类型验证、核心设置、真实组件深浅主题 | 设置与 MCP 配置已实测；跨 DPI 见未覆盖项 |
 | JSON／CSV 导入、备份、损坏恢复 | core/import、storage | CSV 幂等、合并不覆盖、兼容包装、损坏保全、版本拒绝 | Windows 实际文件 I/O 集成测试 |
 | 回收站、恢复、永久删除及确认偏好 | core/service、App | 本地权限和确认、整站操作、Agent 权限拒绝 | 永久删除逻辑用隔离核心测试覆盖 |
-| Agent 新建／修改审核 | core/service、AgentReview | 基础版本冲突、修改不提前覆盖、差异／批量审批组件 | 实际标准 stdio 创建 pending；无自动审核遮挡 |
+| Agent 新建／修改审核 | core/service、AgentReview | 基础版本冲突、修改不提前覆盖、独立审核页／批量审批组件 | 实际标准 stdio 创建 pending；无自动审核遮挡；最新交互见安装反馈记录 |
 | MCP 发现、身份、幂等、开关 | crates/mcp、host | 官方 SDK stdio、动态端口、过期身份、重启、并发、失败关闭和终态回执 | 实际 Tauri 核心与 stdio 链路通过 |
 | 原生悬浮栏与提醒 | desktop/native | 原生生产源码、消息和显示回执；核心提醒测试 | 原生工具窗视觉／多屏覆盖限制见验证报告 |
 | 提醒恢复、延后、失效 | core/reminders | 已提示／已处理、跨午夜、提前量、改期／关提醒、通知幂等 | 系统 Toast 与原生视觉不能由核心测试代替 |
 | 窗口销毁、退出交接 | host、desktop、App/FloatingApp | 草稿失败／IME／在途提交、退出拒绝与取消 | 实际窗口释放、进程树与清理见生命周期报告 |
-| 导航编辑与任务筛选（81f增量） | navigation、AppNavigation、TaskFilterControl | 8项核心导航检查、实际组件排序隐藏／筛选会话 | 来源单独记录，未混入未提交改动 |
+| 导航整理与任务筛选（81f增量及安装反馈修正） | navigation、AppNavigation、TaskFilterControl | 原位长按／拖动／隐藏恢复，保存失败与取消，筛选会话 | 来源单独记录；最新验证见 feedback-20261030.md |
 
 保留业务与风格不等于照搬宿主。原 Electron IPC、Node MCP、Web 权威保存和 React 提醒计时器已从运行路径替换为 Rust 核心。原有 TypeScript 业务测试保留为迁移参考；实际命令权威由 Rust 测试验证。

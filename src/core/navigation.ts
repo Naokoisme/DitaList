@@ -8,11 +8,11 @@ export const RAIL_NAV_ITEMS = [
   { id: "rail:habits", label: "习惯" },
   { id: "rail:search", label: "搜索" },
   { id: "rail:data", label: "数据与备份" },
-  { id: "rail:settings", label: "设置" },
   { id: "rail:help", label: "快捷键与帮助" },
 ] as const;
 
 export const SIDEBAR_NAV_ITEMS = [
+  { id: "agent-review", label: "Agent 待确认" },
   { id: "today", label: "今天" },
   { id: "next7", label: "最近7天" },
   { id: "inbox", label: "收集箱" },

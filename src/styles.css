@@ -1234,9 +1234,14 @@ textarea::placeholder {
   margin-right: 6px;
   color: var(--accent);
 }
-.agent-review-dialog {
-  width: 520px;
-}
+.agent-review-page { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.agent-review-page h1 { display: flex; align-items: center; gap: 8px; }
+.agent-review-intro { margin: 2px 24px 16px; color: var(--muted); font-size: 13px; }
+.agent-review-page .agent-review-list { flex: 1; min-height: 0; max-height: none; margin: 0; padding: 0 24px 16px; }
+.agent-review-page > .inline-error { padding: 0 24px; }
+.agent-review-footer { display: flex; align-items: center; gap: 12px; padding: 14px 24px; border-top: 1px solid var(--line); }
+.agent-review-footer label { display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.agent-review-footer input[type="checkbox"] { width: 14px; height: 14px; min-height: 14px; padding: 0; }
 .agent-review-header-title h2 {
   display: flex;
   align-items: center;

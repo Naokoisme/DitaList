@@ -23,7 +23,7 @@
   width: 100%;
   padding-bottom: 0;
 }
-.customizable-icon-rail .navigation-editor-trigger {
+.customizable-icon-rail .navigation-settings {
   flex-shrink: 0;
   margin: 10px 0 13px;
 }
@@ -46,7 +46,6 @@
 .navigation-sidebar-footer .sidebar-local-note {
   padding-top: 8px;
 }
-.navigation-customize-button,
 .navigation-hidden-entry {
   display: flex;
   align-items: center;
@@ -62,7 +61,6 @@
 .navigation-hidden-entry {
   font-size: 11px;
 }
-.navigation-customize-button:hover,
 .navigation-hidden-entry:hover {
   color: var(--accent-ink);
   background: var(--soft);
@@ -88,9 +86,116 @@
     width: 44px;
     min-width: 44px;
   }
-  .customizable-icon-rail .navigation-editor-trigger {
+  .customizable-icon-rail .navigation-settings {
     margin: 0 0 0 3px;
     border-left: 1px solid var(--line);
     border-radius: 0;
   }
+}
+
+.navigation-sortable {
+  position: relative;
+  -webkit-app-region: no-drag;
+}
+.navigation-sortable-rail {
+  width: 40px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+.navigation-sortable-section {
+  margin: 20px 0 14px;
+}
+.navigation-sortable-section .navigation-section {
+  margin: 0;
+}
+.navigation-sortable.is-editing {
+  border-radius: 7px;
+  outline: 1px dashed color-mix(in srgb, var(--muted) 40%, transparent);
+  outline-offset: -1px;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.navigation-sortable.is-editing > .navigation-sortable-content > .navigation-system-entry > .sidebar-item,
+.navigation-sortable.is-editing > .navigation-sortable-content > .sidebar-item,
+.navigation-sortable.is-editing > .navigation-sortable-content > .sidebar-list-item > .sidebar-item {
+  padding-right: 34px;
+}
+.navigation-sortable.is-editing .sidebar-section-heading > button,
+.navigation-sortable.is-editing .sidebar-section-heading > div,
+.navigation-sortable.is-editing .list-edit-button {
+  visibility: hidden;
+}
+.navigation-sortable.is-hidden > .navigation-sortable-content {
+  opacity: 0.35;
+}
+.navigation-sortable.is-dragging {
+  outline-color: var(--accent);
+  background: var(--soft);
+  cursor: grabbing;
+}
+.navigation-sortable.drop-before::before,
+.navigation-sortable.drop-after::after {
+  content: "";
+  position: absolute;
+  height: 3px;
+  left: 2px;
+  right: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+  pointer-events: none;
+  z-index: 3;
+}
+.navigation-sortable.drop-before::before { top: -2px; }
+.navigation-sortable.drop-after::after { bottom: -2px; }
+.navigation-visibility {
+  position: absolute;
+  top: 5px;
+  right: 3px;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  border-radius: 5px;
+  background: var(--panel);
+}
+.navigation-visibility:hover { color: var(--accent-ink); background: var(--soft); }
+.navigation-sortable-rail .navigation-visibility {
+  width: 17px;
+  height: 17px;
+  top: -3px;
+  right: -3px;
+  border: 1px solid var(--line);
+}
+.navigation-sortable-rail .navigation-visibility svg { width: 12px; height: 12px; }
+.navigation-is-editing .navigation-sidebar-scroll { padding-bottom: 95px; }
+.navigation-edit-toolbar {
+  position: fixed;
+  left: 60px;
+  bottom: 12px;
+  z-index: 45;
+  width: 220px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  box-shadow: 0 4px 18px #0002;
+  font-size: 12px;
+  color: var(--muted);
+  -webkit-app-region: no-drag;
+}
+.navigation-edit-toolbar > div { display: flex; gap: 8px; margin-top: 8px; justify-content: flex-end; }
+.navigation-edit-toolbar button { display: flex; align-items: center; gap: 4px; border-radius: 5px; padding: 5px 8px; color: var(--text); }
+.navigation-edit-toolbar button:hover { background: var(--hover); }
+.navigation-edit-toolbar .navigation-edit-done { background: var(--accent); color: white; }
+.navigation-edit-toolbar p { color: var(--danger, #d44); margin: 7px 0 0; }
+@media (max-width: 700px) {
+  .navigation-sortable-rail { flex: 0 0 44px; width: 44px; }
+  .navigation-sortable-rail.drop-before::before,
+  .navigation-sortable-rail.drop-after::after { top: 2px; bottom: 2px; width: 3px; height: auto; }
+  .navigation-sortable-rail.drop-before::before { left: -2px; right: auto; }
+  .navigation-sortable-rail.drop-after::after { right: -2px; left: auto; }
+  .navigation-edit-toolbar { left: 10px; bottom: 62px; }
 }

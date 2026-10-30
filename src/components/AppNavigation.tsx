@@ -14,15 +14,18 @@ import {
   ListFilter,
   Plus,
   Search,
-  Settings2,
+  Settings,
+  Eye,
+  EyeOff,
+  Check,
+  X,
   ShieldCheck,
-  SlidersHorizontal,
   SquareCheck,
   Trash2,
   Bot,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { AppData, Folder as TaskFolder, Task, TaskList, ViewId } from "../model";
+import type { AppData, Folder as TaskFolder, Task, TaskList, ViewId, NavigationPreferences } from "../model";
 import { addDays, localDate } from "../core/domain";
 import type { ListMoveTarget } from "../core/list-organization";
 import {
@@ -31,6 +34,7 @@ import {
   isNavigationItemVisible,
   orderNavigationItems,
 } from "../core/navigation";
+import useNavigationEditing from "./useNavigationEditing";
 import "../app-navigation.css";
 
 interface AppNavigationProps {
@@ -47,7 +51,8 @@ interface AppNavigationProps {
   onSettings: (section: "general" | "data") => void;
   onSearch: () => void;
   onHelp: () => void;
-  onEditNavigation: () => void;
+  onSaveNavigation: (preferences: NavigationPreferences) => Promise<boolean>;
+  onEditingChange?: (editing: boolean) => void;
   onAgentReview: () => void;
   todayCount: number;
   pendingCount: number;
@@ -78,7 +83,8 @@ export default function AppNavigation({
   onSettings,
   onSearch,
   onHelp,
-  onEditNavigation,
+  onSaveNavigation,
+  onEditingChange,
   onAgentReview,
   todayCount,
   pendingCount,
@@ -92,13 +98,8 @@ export default function AppNavigation({
   renderTagItem,
   listGroupDropProps,
 }: AppNavigationProps) {
-  const preferences = data.settings.navigation;
-  const visible = (id: string) => isNavigationItemVisible(preferences, id);
   const today = localDate();
   const fullView = ["calendar", "matrix", "focus", "habits"].includes(view);
-  const orderedRail = orderNavigationItems(RAIL_NAV_ITEMS, preferences, "rail");
-  const sidebarEntries = orderNavigationItems(SIDEBAR_NAV_ITEMS, preferences, "sidebar")
-    .filter((item) => visible(item.id));
   const lists = data.lists
     .filter((list) => list.id !== "inbox" && !list.archived)
     .sort((a, b) => a.sortOrder - b.sortOrder);
@@ -107,26 +108,61 @@ export default function AppNavigation({
     ...data.folders.slice().sort((a, b) => a.sortOrder - b.sortOrder)
       .map((folder) => ({ id: `folder:${folder.id}`, folder })),
   ];
-  const rootLists = orderNavigationItems(rootListEntries, preferences, "lists")
-    .filter((item) => visible(item.id));
-  const visibleTags = orderNavigationItems(
-    tags.map((tag) => ({ id: `tag:${tag}`, tag })), preferences, "tags",
-  ).filter((item) => visible(item.id));
-  const visibleFilters = orderNavigationItems(
-    data.filters.map((filter) => ({ id: `filter:${filter.id}`, filter })), preferences, "filters",
-  ).filter((item) => visible(item.id));
-
+  const edit = useNavigationEditing(data.settings.navigation, {
+    rail: RAIL_NAV_ITEMS.map((item) => item.id),
+    sidebar: SIDEBAR_NAV_ITEMS.map((item) => item.id),
+    lists: rootListEntries.map((item) => item.id),
+    tags: tags.map((tag) => `tag:${tag}`),
+    filters: data.filters.map((filter) => `filter:${filter.id}`),
+    ...Object.fromEntries(data.folders.map((folder) => [`folder:${folder.id}`, lists.filter((list) => list.folderId === folder.id).map((list) => `list:${list.id}`)])),
+  }, onSaveNavigation, onEditingChange);
+  const preferences = edit.preferences;
+  const visible = (id: string) => edit.editing || isNavigationItemVisible(preferences, id);
+  const orderedRail = orderNavigationItems(RAIL_NAV_ITEMS, preferences, "rail");
+  const sidebarEntries = orderNavigationItems(SIDEBAR_NAV_ITEMS, preferences, "sidebar").filter((item) => visible(item.id));
+  const rootLists = orderNavigationItems(rootListEntries, preferences, "lists").filter((item) => visible(item.id));
+  const visibleTags = orderNavigationItems(tags.map((tag) => ({ id: `tag:${tag}`, tag })), preferences, "tags").filter((item) => visible(item.id));
+  const visibleFilters = orderNavigationItems(data.filters.map((filter) => ({ id: `filter:${filter.id}`, filter })), preferences, "filters").filter((item) => visible(item.id));
   const openEditorFromContext = (event: MouseEvent<HTMLElement>) => {
-    // A list or tag may already own this context-menu action.
+    // Preserve a list or tag's own menu in the normal navigation mode.
     if (event.defaultPrevented) return;
     event.preventDefault();
-    onEditNavigation();
+    edit.begin();
   };
   const hiddenNotice = (label: string) => (
-    <button type="button" className="navigation-hidden-entry" onClick={onEditNavigation}>
-      {label}已隐藏 · 编辑导航
+    <button type="button" className="navigation-hidden-entry" onClick={edit.begin}>
+      {label}已隐藏 · 恢复入口
     </button>
   );
+  const sortable = (group: string, id: string, label: string, child: ReactNode, section = false) => {
+    const hidden = preferences.hidden.includes(id);
+    const drop = edit.target?.id === id && edit.target.group === group ? edit.target.after ? "drop-after" : "drop-before" : "";
+    return <div key={id}
+      className={`navigation-sortable ${group === "rail" ? "navigation-sortable-rail" : ""} ${section ? "navigation-sortable-section" : ""} ${edit.editing ? "is-editing" : ""} ${hidden ? "is-hidden" : ""} ${edit.dragging === id ? "is-dragging" : ""} ${drop}`}
+      data-navigation-id={id} data-navigation-group={group}
+      title={edit.editing ? "拖动排序，点击眼睛隐藏或恢复" : "长按整理导航"}
+      tabIndex={edit.editing ? 0 : undefined}
+      onPointerDownCapture={(event) => edit.start(event, group, id)}
+      onClickCapture={edit.captureClick}
+      onDoubleClickCapture={edit.captureClick}
+      onContextMenuCapture={(event) => { if (edit.editing) { event.preventDefault(); event.stopPropagation(); } }}
+      onDragStartCapture={(event) => { if (edit.editing) { event.preventDefault(); event.stopPropagation(); } else edit.clearGesture(); }}
+      onKeyDown={(event) => {
+        if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); edit.begin(); }
+        if (edit.editing && event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
+          event.preventDefault(); event.stopPropagation();
+          const peers = [...event.currentTarget.parentElement!.querySelectorAll<HTMLElement>("[data-navigation-id]")].filter((item) => item.dataset.navigationGroup === group);
+          const index = peers.findIndex((item) => item.dataset.navigationId === id);
+          const other = peers[index + (event.key === "ArrowUp" ? -1 : 1)];
+          if (other) edit.move(group, id, other.dataset.navigationId!, event.key === "ArrowDown");
+        }
+      }}>
+      <div className="navigation-sortable-content">{child}</div>
+      {edit.editing && <button type="button" data-navigation-control className="navigation-visibility"
+        aria-label={`${hidden ? "显示" : "隐藏"}${label}`} title={`${hidden ? "显示" : "隐藏"}${label}`} disabled={edit.saving}
+        onClick={() => edit.toggle(id)}>{hidden ? <Eye size={14} /> : <EyeOff size={14} />}</button>}
+    </div>;
+  };
   const groupHighlighted = (folderId: string | null) =>
     listDropTarget?.kind === "group" && listDropTarget.folderId === folderId;
 
@@ -138,7 +174,6 @@ export default function AppNavigation({
     "rail:habits": { Icon: CalendarCheck2, run: () => onGo("habits"), selected: view === "habits" },
     "rail:search": { Icon: Search, run: onSearch },
     "rail:data": { Icon: ShieldCheck, run: () => onSettings("data") },
-    "rail:settings": { Icon: Settings2, run: () => onSettings("general") },
     "rail:help": { Icon: CircleHelp, run: onHelp },
   };
   const renderRailItem = (item: (typeof RAIL_NAV_ITEMS)[number]) => {
@@ -146,7 +181,7 @@ export default function AppNavigation({
     const { Icon, run, selected } = railActions[item.id];
     const label = item.id === "rail:data" ? `${saveStatusLabel}，查看数据与备份` :
       item.id === "rail:search" ? "搜索 Ctrl+K" : item.label;
-    return (
+    return sortable("rail", item.id, item.label, (
       <button
         type="button"
         key={item.id}
@@ -157,7 +192,7 @@ export default function AppNavigation({
       >
         <Icon size={21} />
       </button>
-    );
+    ));
   };
 
   const renderLists = () => (
@@ -177,14 +212,14 @@ export default function AppNavigation({
         </div>
       </div>
       {rootLists.map((entry) => {
-        if (entry.list) return renderListItem(entry.list);
+        if (entry.list) return sortable("lists", entry.id, entry.list.name, renderListItem(entry.list));
         const folder = entry.folder!;
         const folderLists = lists.filter((list) => list.folderId === folder.id);
         const children = orderNavigationItems(
           folderLists.map((list) => ({ id: `list:${list.id}`, list })),
           preferences, `folder:${folder.id}`,
         ).filter((item) => visible(item.id));
-        return (
+        return sortable("lists", entry.id, folder.name, (
           <details className="sidebar-folder" key={entry.id} open>
             <summary
               className={`${draggingListId ? "list-group-drop-candidate" : ""} ${groupHighlighted(folder.id) ? "list-group-drag-over" : ""}`}
@@ -196,10 +231,10 @@ export default function AppNavigation({
               <span>{folder.name}</span>
               {groupHighlighted(folder.id) && <small>移入</small>}
             </summary>
-            {children.map((item) => renderListItem(item.list))}
+            {children.map((item) => sortable(`folder:${folder.id}`, item.id, item.list.name, renderListItem(item.list)))}
             {folderLists.length > 0 && children.length === 0 && hiddenNotice("分组内的清单")}
           </details>
-        );
+        ));
       })}
       {draggingListId && (
         <div
@@ -225,7 +260,7 @@ export default function AppNavigation({
           <Plus size={14} />
         </button>
       </div>
-      {visibleTags.map((item) => renderTagItem(item.tag))}
+      {visibleTags.map((item) => sortable("tags", item.id, item.tag, renderTagItem(item.tag)))}
       {tags.length > 0 && visibleTags.length === 0 && hiddenNotice("标签")}
       {tags.length === 0 && (
         <button type="button" className="sidebar-empty-add" onClick={onAddTag}>
@@ -242,7 +277,7 @@ export default function AppNavigation({
           <Plus size={14} />
         </button>
       </div>
-      {visibleFilters.map(({ filter }) => renderSidebarItem(`filter:${filter.id}`, filter.name, ListFilter))}
+      {visibleFilters.map(({ id, filter }) => sortable("filters", id, filter.name, renderSidebarItem(`filter:${filter.id}`, filter.name, ListFilter)))}
       {data.filters.length > 0 && visibleFilters.length === 0 && hiddenNotice("过滤器")}
       {data.filters.length === 0 && (
         <p className="sidebar-hint">按日期、优先级和标签，<br />快速找到你关心的任务。</p>
@@ -261,46 +296,44 @@ export default function AppNavigation({
     trash: data.tasks.filter((task) => task.deletedAt).length,
   };
   const renderSidebarEntry = (entry: (typeof SIDEBAR_NAV_ITEMS)[number]) => {
-    if (entry.id === "section:lists") return renderLists();
-    if (entry.id === "section:tags") return renderTags();
-    if (entry.id === "section:filters") return renderFilters();
-    return (
+    if (entry.id === "section:lists") return sortable("sidebar", entry.id, entry.label, renderLists(), true);
+    if (entry.id === "section:tags") return sortable("sidebar", entry.id, entry.label, renderTags(), true);
+    if (entry.id === "section:filters") return sortable("sidebar", entry.id, entry.label, renderFilters(), true);
+    if (entry.id === "agent-review") return sortable("sidebar", entry.id, entry.label, <button type="button" className={`sidebar-item agent-review-entry ${view === "agent-review" ? "selected" : ""}`} onClick={onAgentReview}><Bot size={17}/><span>Agent 待确认</span><small>{pendingCount || ""}</small></button>);
+    return sortable("sidebar", entry.id, entry.label, (
       <div className="navigation-system-entry" key={entry.id}>
         {renderSidebarItem(entry.id, entry.label, sidebarIcons[entry.id], sidebarCounts[entry.id])}
       </div>
-    );
+    ));
   };
 
   return (
     <>
-      <nav className="icon-rail customizable-icon-rail" aria-label="主导航" onContextMenu={openEditorFromContext}>
-        <button type="button" className="local-avatar" aria-label="设置" title="DitaList · 设置" onClick={() => onSettings("general")}>
+      <nav className={`icon-rail customizable-icon-rail ${edit.editing ? "navigation-is-editing" : ""}`} aria-label="主导航" onContextMenu={openEditorFromContext}>
+        <button type="button" className="local-avatar" aria-label="设置" title="DitaList · 设置" onClick={() => onSettings("general")} disabled={edit.editing}>
           <img src="./icon.svg" alt="" />
         </button>
         <div className="navigation-rail-scroll">
           <div className="rail-primary">{orderedRail.slice(0, 6).map(renderRailItem)}</div>
           <div className="rail-bottom">{orderedRail.slice(6).map(renderRailItem)}</div>
+          {!orderedRail.some((item) => visible(item.id)) && <button type="button" className="rail-button" aria-label="恢复导航入口" title="恢复导航入口" onClick={edit.begin}><Eye size={18}/></button>}
         </div>
-        <button type="button" className="rail-button navigation-editor-trigger" title="编辑导航" aria-label="编辑导航" onClick={onEditNavigation}>
-          <SlidersHorizontal size={18} />
+        <button type="button" className="rail-button navigation-settings" title="设置" aria-label="设置" onClick={() => onSettings("general")} disabled={edit.editing}>
+          <Settings size={21} />
         </button>
       </nav>
       {!fullView && (
         <>
-          <aside className={`app-sidebar customizable-sidebar ${sidebarOpen ? "mobile-open" : ""}`} aria-label="任务分类" onContextMenu={openEditorFromContext}>
+          <aside className={`app-sidebar customizable-sidebar ${sidebarOpen ? "mobile-open" : ""} ${edit.editing ? "navigation-is-editing" : ""}`} aria-label="任务分类" onContextMenu={openEditorFromContext}>
             <div className="sidebar-scroll navigation-sidebar-scroll">
-              <button className="sidebar-item agent-review-entry" onClick={onAgentReview}><Bot size={17}/><span>Agent 待确认</span><small>{pendingCount || ""}</small></button>
               {sidebarEntries.map(renderSidebarEntry)}
               {sidebarEntries.length === 0 && (
-                <button type="button" className="navigation-hidden-entry" onClick={onEditNavigation}>
+                <button type="button" className="navigation-hidden-entry" onClick={edit.begin}>
                   导航已隐藏 · 选择显示的入口
                 </button>
               )}
             </div>
             <div className="sidebar-lower navigation-sidebar-footer">
-              <button type="button" className="navigation-customize-button" onClick={onEditNavigation}>
-                <SlidersHorizontal size={14} />编辑导航
-              </button>
               <div className="sidebar-local-note">
                 <span className={`status-dot ${saveStatus === "error" ? "error" : ""}`} />
                 {saveStatus === "saved" ? "仅本机 · 已保存" : saveStatus === "saving" ? "正在保存…" : "保存失败，请检查"}
@@ -310,6 +343,11 @@ export default function AppNavigation({
           {sidebarOpen && <div className="sidebar-scrim" onClick={onCloseSidebar} />}
         </>
       )}
+      {edit.editing && <div className="navigation-edit-toolbar" role="region" aria-label="整理导航">
+        <span>拖动排序 · 点眼睛隐藏或恢复</span>
+        <div><button type="button" onClick={edit.cancel} disabled={edit.saving}><X size={14}/>取消</button><button type="button" className="navigation-edit-done" onClick={() => void edit.finish()} disabled={edit.saving}><Check size={14}/>{edit.saving ? "保存中…" : "完成"}</button></div>
+        {edit.error && <p role="alert">{edit.error}</p>}
+      </div>}
     </>
   );
 }

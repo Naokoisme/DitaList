@@ -1,6 +1,7 @@
 //! One Win32 UI thread owns all HWNDs and Direct2D resources.
 //! Owner-drawn standard buttons preserve the OS keyboard/accessibility providers.
 use super::DesktopAction;
+use super::position::Dock;
 use chrono::{DateTime, Local, Utc};
 use ditalist_contracts::{CoreSnapshot, Operation, ReminderEvent};
 use serde_json::json;
@@ -59,6 +60,7 @@ pub struct Anchor {
     pub top: f64,
     pub scale: f64,
     pub work_x: f64,
+    pub work_y: f64,
     pub work_width: f64,
     pub work_bottom: f64,
 }
@@ -69,6 +71,7 @@ impl Default for Anchor {
             top: 700.,
             scale: 1.,
             work_x: 0.,
+            work_y: 0.,
             work_width: 1920.,
             work_bottom: 1080.,
         }
@@ -81,6 +84,10 @@ pub enum NativeCommand {
     ShowReminders,
     BeginDrag { x: i32, y: i32 },
     Shutdown,
+}
+
+pub(super) fn primary_button_down() -> bool {
+    unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 }
 }
 
 #[derive(Clone)]
@@ -208,6 +215,20 @@ struct Button {
     width: f32,
     tooltip: Vec<u16>,
 }
+
+fn clicked_button<'a>(
+    wparam: WPARAM,
+    lparam: LPARAM,
+    mut buttons: impl Iterator<Item = &'a Button>,
+) -> Option<usize> {
+    if (wparam.0 >> 16) & 0xffff != BN_CLICKED as usize || lparam.0 == 0 {
+        return None;
+    }
+    let id = wparam.0 & 0xffff;
+    buttons
+        .find(|button| button.id == id && button.hwnd.0 as isize == lparam.0)
+        .map(|button| button.id)
+}
 enum Panel {
     None,
     Reminder { id: String, automatic: bool },
@@ -225,6 +246,7 @@ struct Runtime {
     snapshot: Option<CoreSnapshot>,
     input_active: bool,
     dragging: bool,
+    dock: Dock,
     panel_state: Panel,
     panel_painted: bool,
     presented: HashSet<(String, String)>,
@@ -293,6 +315,7 @@ impl Runtime {
                     snapshot: None,
                     input_active: false,
                     dragging: false,
+                    dock: Dock::default(),
                     panel_state: Panel::None,
                     panel_painted: false,
                     presented: HashSet::new(),
@@ -488,6 +511,7 @@ impl Runtime {
                     NativeCommand::ShowReminders => self.show_reminders(false),
                     NativeCommand::BeginDrag { x, y } => {
                         if GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 {
+                            self.dock = Dock::default();
                             let _ = SetWindowPos(
                                 self.bar,
                                 Some(HWND_TOPMOST),
@@ -502,11 +526,13 @@ impl Runtime {
                             let _ = GetCursorPos(&mut point);
                             let position =
                                 ((point.y as u32 & 0xffff) << 16) | (point.x as u32 & 0xffff);
-                            SendMessageW(
-                                self.bar,
+                            // Release the Runtime RefCell borrow before User32
+                            // enters its modal move loop and reenters window_proc.
+                            let _ = PostMessageW(
+                                Some(self.bar),
                                 WM_NCLBUTTONDOWN,
-                                Some(WPARAM(HTCAPTION as usize)),
-                                Some(LPARAM(position as isize)),
+                                WPARAM(HTCAPTION as usize),
+                                LPARAM(position as isize),
                             );
                             self.refresh(true);
                         }
@@ -548,7 +574,7 @@ impl Runtime {
                 let _ = ShowWindow(self.bar, SW_HIDE);
                 self.hide_panel();
             }
-            if redraw {
+            if redraw && !self.dragging {
                 self.layout();
             }
             if visible && !quiet && !self.dragging && matches!(self.panel_state, Panel::None) {
@@ -588,7 +614,7 @@ impl Runtime {
                     PENDING => format!("Agent 待确认 {pending} 项"),
                     REMINDERS => format!("到时提醒 {reminders} 项"),
                     ADD => "快速添加任务".into(),
-                    DRAG => "移动悬浮栏，方向键微调".into(),
+                    DRAG => "拖动悬浮栏，靠近屏幕边缘自动吸附".into(),
                     _ => button.label.clone(),
                 };
                 let label = wide(&accessible);
@@ -629,13 +655,12 @@ impl Runtime {
             let width = (x * scale) as i32;
             let height = (40. * scale) as i32;
             let work = work_area(self.bar);
-            let left = (rect.right - width).max(work.left).min(work.right - width);
-            let top = rect.top.max(work.top).min(work.bottom - height);
+            let position = self.dock.position(rect, width, height, work, self.dpi);
             let _ = SetWindowPos(
                 self.bar,
                 Some(HWND_TOPMOST),
-                left,
-                top,
+                position.x,
+                position.y,
                 width,
                 height,
                 SWP_NOACTIVATE,
@@ -675,6 +700,7 @@ impl Runtime {
                 top: rect.top as f64,
                 scale: (self.dpi / 96.) as f64,
                 work_x: work.left as f64,
+                work_y: work.top as f64,
                 work_width: (work.right - work.left) as f64,
                 work_bottom: work.bottom as f64,
             };
@@ -1185,7 +1211,15 @@ unsafe extern "system" fn window_proc(
                 LRESULT(1)
             }
             WM_COMMAND => {
-                runtime.command(wparam.0 & 0xffff);
+                // Owner-drawn buttons also send focus/highlight notifications.
+                // Only a click from the matching control can invoke its action.
+                if let Some(id) = clicked_button(
+                    wparam,
+                    lparam,
+                    runtime.buttons.iter().chain(&runtime.panel_buttons),
+                ) {
+                    runtime.command(id);
+                }
                 LRESULT(0)
             }
             WM_CONTEXTMENU => {
@@ -1236,11 +1270,15 @@ unsafe extern "system" fn window_proc(
             }
             WM_ENTERSIZEMOVE => {
                 runtime.dragging = true;
+                runtime.dock = Dock::default();
                 runtime.hide_panel();
                 LRESULT(0)
             }
             WM_EXITSIZEMOVE => {
                 runtime.dragging = false;
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(runtime.bar, &mut rect);
+                runtime.dock = Dock::after_drag(rect, work_area(runtime.bar), runtime.dpi);
                 runtime.layout();
                 runtime.update_anchor();
                 LRESULT(0)
@@ -1315,57 +1353,17 @@ unsafe extern "system" fn drag_proc(
     _data: usize,
 ) -> LRESULT {
     unsafe {
-        if message == WM_GETDLGCODE {
-            return LRESULT(
-                DefSubclassProc(hwnd, message, wparam, lparam).0 | DLGC_WANTARROWS as isize,
-            );
-        }
-        if message == WM_KEYDOWN
-            && matches!(wparam.0 as u16,code if [VK_LEFT.0,VK_RIGHT.0,VK_UP.0,VK_DOWN.0].contains(&code))
-        {
-            if let Ok(parent) = GetParent(hwnd) {
-                let mut rect = RECT::default();
-                let _ = GetWindowRect(parent, &mut rect);
-                let work = work_area(parent);
-                let step = ((GetDpiForWindow(parent).max(96) as f32 / 96.)
-                    * if GetKeyState(VK_SHIFT.0 as i32) < 0 {
-                        1.
-                    } else {
-                        10.
-                    }) as i32;
-                let key = wparam.0 as u16;
-                let x = rect.left
-                    + if key == VK_LEFT.0 {
-                        -step
-                    } else if key == VK_RIGHT.0 {
-                        step
-                    } else {
-                        0
-                    };
-                let y = rect.top
-                    + if key == VK_UP.0 {
-                        -step
-                    } else if key == VK_DOWN.0 {
-                        step
-                    } else {
-                        0
-                    };
-                let _ = SetWindowPos(
-                    parent,
-                    None,
-                    x.max(work.left).min(work.right - (rect.right - rect.left)),
-                    y.max(work.top).min(work.bottom - (rect.bottom - rect.top)),
-                    0,
-                    0,
-                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-                );
-            }
-            return LRESULT(0);
-        }
         if message == WM_LBUTTONDOWN {
+            let _ = SetFocus(Some(hwnd));
+            let mut point = POINT::default();
+            let _ = GetCursorPos(&mut point);
+            // A click or small hand jitter is not a move gesture. DragDetect
+            // uses the system threshold and consumes the matching release.
+            if !DragDetect(hwnd, point).as_bool() {
+                return LRESULT(0);
+            }
             let _ = ReleaseCapture();
             if let Ok(parent) = GetParent(hwnd) {
-                let mut point = POINT::default();
                 let _ = GetCursorPos(&mut point);
                 let position = ((point.y as u32 & 0xffff) << 16) | (point.x as u32 & 0xffff);
                 SendMessageW(
@@ -1619,6 +1617,50 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn button_actions_require_a_click_from_the_matching_control() {
+        let button = Button {
+            hwnd: HWND(0x1000 as *mut c_void),
+            id: ADD,
+            label: String::new(),
+            width: 40.,
+            tooltip: vec![],
+        };
+        let control = LPARAM(button.hwnd.0 as isize);
+        assert_eq!(
+            clicked_button(WPARAM(ADD), control, [&button].into_iter()),
+            Some(ADD)
+        );
+        for notification in [
+            BN_SETFOCUS,
+            BN_KILLFOCUS,
+            BN_PUSHED,
+            BN_UNPUSHED,
+            BN_DOUBLECLICKED,
+        ] {
+            assert_eq!(
+                clicked_button(
+                    WPARAM(ADD | ((notification as usize) << 16)),
+                    control,
+                    [&button].into_iter()
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            clicked_button(WPARAM(ADD), LPARAM(0), [&button].into_iter()),
+            None
+        );
+        assert_eq!(
+            clicked_button(WPARAM(ADD), LPARAM(0x2000), [&button].into_iter()),
+            None
+        );
+        assert_eq!(
+            clicked_button(WPARAM(DRAG), control, [&button].into_iter()),
+            None
+        );
+    }
     #[test]
     fn effective_snooze_time_controls_due_state() {
         let event = ReminderEvent {

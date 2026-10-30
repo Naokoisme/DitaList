@@ -5,7 +5,7 @@ export type Priority = 0 | 1 | 2 | 3;
 export type RepeatRule = "none" | "daily" | "weekdays" | "weekly" | "monthly" | "yearly";
 export type Reminder = "none" | "at-time" | "5m" | "15m" | "30m" | "1h" | "1d";
 export type CalendarMode = "month" | "week" | "day" | "agenda";
-export type ViewId = "today" | "next7" | "inbox" | "all" | "calendar" | "matrix" | "focus" | "habits" | "completed" | "trash" | `list:${string}` | `tag:${string}` | `filter:${string}`;
+export type ViewId = "today" | "next7" | "inbox" | "all" | "agent-review" | "calendar" | "matrix" | "focus" | "habits" | "completed" | "trash" | `list:${string}` | `tag:${string}` | `filter:${string}`;
 export type Subtask = Wire.Subtask;
 export type Task = Omit<Wire.Task, "priority" | "repeat" | "reminder" | "createdBy" | "agentStatus"> & {
   priority: Priority;

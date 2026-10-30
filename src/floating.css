@@ -11,6 +11,7 @@ button svg { pointer-events: none; flex-shrink: 0; }
 .floating-form { display: flex; align-items: center; min-height: 40px; }
 .floating-grip, .floating-add { display: grid; place-items: center; width: 40px; min-height: 40px; align-self: stretch; flex: 0 0 40px; }
 .floating-grip { color: var(--muted); cursor: grab; touch-action: none; border-right: 1px solid var(--line); }
+.floating-grip:active { cursor: grabbing; }
 .floating-today { padding: 0 10px; min-height: 40px; flex: 0 0 auto; font-size: 14px; border-right: 1px solid var(--line); white-space: nowrap; }
 .floating-today b { font-weight: 500; font-variant-numeric: tabular-nums; }
 .floating-close { display: grid; place-items: center; width: 28px; min-height: 40px; flex: 0 0 28px; color: var(--muted); }

@@ -8,6 +8,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Candidate packages exclude optional UI diagnostics and source maps.
 process.env.VITE_DITALIST_DRAG_TRACE = '0';
 process.env.DITALIST_SOURCE_MAPS = '0';
+// Isolation overlays are for local verification; distributable candidates use the checked-in identity.
+delete process.env.TAURI_CONFIG;
 const run = (exe, args, capture = false) => execFileSync(exe, args, {cwd: root, encoding: 'utf8', stdio: capture ? ['ignore', 'pipe', 'inherit'] : 'inherit'});
 if (run('git', ['status', '--porcelain'], true).trim()) throw new Error('请先记录独立仓库源码提交，再生成可追溯候选。');
 const source = run('git', ['rev-parse', 'HEAD'], true).trim();

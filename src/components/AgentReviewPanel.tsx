@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bot, Check, X } from "lucide-react";
+import { Bot, Check, Menu, X } from "lucide-react";
 import type { CommandReceipt, Operation } from "../generated/contracts";
 import type { Snapshot } from "../core/client";
 
@@ -12,8 +12,8 @@ function display(value: unknown, field: string, snapshot: Snapshot): string {
   return Array.isArray(value) ? value.join("、") || "无" : typeof value === "boolean" ? value ? "是" : "否" : String(value);
 }
 
-export default function AgentReviewPanel({snapshot, onClose, onCommand}: {
-  snapshot: Snapshot; onClose: () => void; onCommand: (operation: Operation) => Promise<CommandReceipt | null>;
+export default function AgentReviewPanel({snapshot, onCommand, onOpenSidebar}: {
+  snapshot: Snapshot; onCommand: (operation: Operation) => Promise<CommandReceipt | null>; onOpenSidebar: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -34,8 +34,9 @@ export default function AgentReviewPanel({snapshot, onClose, onCommand}: {
     setBusy(false);
   }
   const actions = (id: string) => <div className="agent-review-actions"><button disabled={busy} className="agent-review-approve" onClick={() => void review([id], true)}><Check size={15}/>批准</button><button disabled={busy} className="agent-review-reject" onClick={() => void review([id], false)}><X size={15}/>拒绝</button></div>;
-  return <div className="modal-backdrop" onMouseDown={onClose}><section className="dialog agent-review-dialog" role="dialog" aria-modal="true" aria-label="Agent 待确认" onMouseDown={(event) => event.stopPropagation()}>
-    <div className="dialog-header"><div><h2><Bot size={20}/>Agent 待确认 <span className="agent-review-count">{ids.length}</span></h2><p className="agent-review-note">新增和修改在批准后生效；查看不会自动批准。</p></div><button className="icon-button" aria-label="关闭审核" onClick={onClose}><X size={19}/></button></div>
+  return <section className="agent-review-page" aria-label="Agent 待确认">
+    <header className="view-header"><button type="button" className="mobile-menu icon-button" aria-label="展开清单" onClick={onOpenSidebar}><Menu size={19}/></button><h1><Bot size={21}/>Agent 待确认 <span className="agent-review-count">{ids.length}</span></h1></header>
+    <p className="agent-review-intro">在这里核对 Agent 提交的新增和修改，批准后才会生效。</p>
     <div className="agent-review-list">
       {creates.map((task) => <article className="agent-review-item" key={task.id}><input type="checkbox" aria-label={`选择 ${task.title}`} checked={selected.has(task.id)} onChange={() => toggle(task.id)}/><div className="agent-review-body"><small>新增任务</small><h3>{task.title}</h3>{task.content && <p className="agent-review-desc">{task.content}</p>}<p className="agent-review-note">{snapshot.data.lists.find((list) => list.id === task.listId)?.name} · {task.dueDate || "无日期"} {task.time || ""}</p></div>{actions(task.id)}</article>)}
       {changes.map((approval) => {
@@ -47,6 +48,6 @@ export default function AgentReviewPanel({snapshot, onClose, onCommand}: {
       {!ids.length && <p className="large-empty">没有待确认事项。</p>}
     </div>
     {error && <p className="inline-error" role="alert">{error}</p>}
-    <div className="dialog-footer"><label><input type="checkbox" checked={ids.length > 0 && ids.every((id) => selected.has(id))} onChange={(event) => setSelected(new Set(event.target.checked ? ids : []))}/>全选</label><button className="text-button" onClick={onClose}>关闭</button><button className="primary-button" disabled={busy || !ids.some((id) => selected.has(id))} onClick={() => void review(ids.filter((id) => selected.has(id)), true)}>批准选中</button></div>
-  </section></div>;
+    {!!ids.length && <div className="agent-review-footer"><label><input type="checkbox" checked={ids.length > 0 && ids.every((id) => selected.has(id))} onChange={(event) => setSelected(new Set(event.target.checked ? ids : []))}/>全选</label><button className="primary-button" disabled={busy || !ids.some((id) => selected.has(id))} onClick={() => void review(ids.filter((id) => selected.has(id)), true)}>批准选中</button></div>}
+  </section>;
 }

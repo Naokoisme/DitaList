@@ -1,5 +1,6 @@
 //! Desktop presentation and window lifetime. Business mutations go back to the core.
 mod native;
+mod position;
 
 use ditalist_contracts::{CoreSnapshot, Operation};
 use serde_json::{Value, json};
@@ -265,14 +266,19 @@ impl Desktop {
             ),
             "quickResize" => self.resize_quick(payload),
             "quickDrag" => {
-                let position = self
-                    .window("quick")?
-                    .outer_position()
-                    .map_err(|e| e.to_string())?;
+                // Draft handoff may outlast a short gesture. A released pointer
+                // must leave the current input and its draft in place.
+                if !native::primary_button_down() {
+                    return Ok(());
+                }
+                let window = self.window("quick")?;
+                let scale = window.scale_factor().map_err(|e| e.to_string())?;
+                let position = window.outer_position().map_err(|e| e.to_string())?;
                 self.close_quick()?;
                 self.inner.native.send(native::NativeCommand::BeginDrag {
-                    x: position.x,
-                    y: position.y,
+                    // The Web bar has a 10-DIP transparent shadow margin.
+                    x: position.x + (10. * scale).round() as i32,
+                    y: position.y + (10. * scale).round() as i32,
                 });
                 Ok(())
             }
@@ -394,7 +400,10 @@ impl Desktop {
         let scale = anchor.scale.max(1.0);
         let width = (420.0_f64 * scale).min(anchor.work_width);
         let x = (anchor.right - width).max(anchor.work_x);
-        let y = anchor.top.min(anchor.work_bottom - 40.0 * scale);
+        let y = anchor.top.clamp(
+            anchor.work_y,
+            (anchor.work_bottom - 40.0 * scale).max(anchor.work_y),
+        );
         {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             state.quick_generation += 1;
@@ -593,15 +602,21 @@ impl Desktop {
             .get("height")
             .and_then(Value::as_f64)
             .unwrap_or(40.)
-            .clamp(40., 480.);
+            .clamp(40., 480.)
+            .min((anchor.work_bottom - anchor.work_y) / scale);
         window
             .set_size(tauri::LogicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
-        let pos = window.outer_position().map_err(|e| e.to_string())?;
         window
             .set_position(tauri::PhysicalPosition::new(
-                pos.x.max(anchor.work_x as i32),
-                pos.y.min((anchor.work_bottom - height * scale) as i32),
+                (anchor.right - width * scale).clamp(
+                    anchor.work_x,
+                    (anchor.work_x + anchor.work_width - width * scale).max(anchor.work_x),
+                ) as i32,
+                anchor.top.clamp(
+                    anchor.work_y,
+                    (anchor.work_bottom - height * scale).max(anchor.work_y),
+                ) as i32,
             ))
             .map_err(|e| e.to_string())
     }

@@ -23,6 +23,7 @@ export default function FloatingApp() {
   const submission = useRef<Promise<unknown> | null>(null);
   const exitRequested = useRef(false);
   const exitSequence = useRef(0);
+  const gripStart = useRef<{pointerId: number; x: number; y: number} | null>(null);
 
   function saveDraft(draft = current.current) {
     const copy = {...draft};
@@ -155,9 +156,22 @@ export default function FloatingApp() {
     if (event.key === "Escape" && !composing.current && !event.nativeEvent.isComposing) { event.preventDefault(); void collapse(); }
   }}>
     <form className="floating-form" onSubmit={submit}>
-      <button type="button" className="floating-grip" aria-label="拖动悬浮栏" title="拖动悬浮栏" onPointerDown={async (event) => {
-        if (event.button !== 0 || composing.current) return;
-        try { await saveDraft(); await desktopAction("quickDrag"); } catch (error) { setHint(errorMessage(error)); }
+      <button type="button" className="floating-grip" aria-label="拖动悬浮栏" title="拖动悬浮栏" onPointerDown={(event) => {
+        if (event.button !== 0 || composing.current || submission.current || exitRequested.current) return;
+        // Keep a click on the grip from taking the input focus or ending editing.
+        event.preventDefault();
+        gripStart.current = {pointerId: event.pointerId, x: event.clientX, y: event.clientY};
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }} onPointerMove={(event) => {
+        const start = gripStart.current;
+        if (!start || start.pointerId !== event.pointerId || (Math.abs(event.clientX - start.x) < 4 && Math.abs(event.clientY - start.y) < 4)) return;
+        gripStart.current = null;
+        event.currentTarget.releasePointerCapture(event.pointerId);
+        void (async () => {
+          try { await saveDraft(); await desktopAction("quickDrag"); } catch (error) { setHint(errorMessage(error)); }
+        })();
+      }} onPointerUp={() => { gripStart.current = null; }} onPointerCancel={() => { gripStart.current = null; }} onLostPointerCapture={() => {
+        gripStart.current = null;
       }}><GripVertical size={16}/></button>
       <button type="button" className="floating-today" title="查看今天待办（含逾期）" onClick={() => void collapse("today")}>今天 <b>{(snapshot?.todayCount || 0) > 99 ? "99+" : snapshot?.todayCount || 0}</b></button>
       <textarea ref={input} value={text} rows={1} maxLength={10000} style={{height}} aria-label="快速添加任务" placeholder="记下一件事…" readOnly={sending || unresolved}

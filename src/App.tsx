@@ -77,7 +77,6 @@ import type { CommandReceipt, Operation } from "./generated/contracts";
 import AgentReviewPanel from "./components/AgentReviewPanel";
 import McpSettings from "./components/McpSettings";
 import AppNavigation from "./components/AppNavigation";
-import NavigationEditor from "./components/NavigationEditor";
 import TaskFilterControl from "./components/TaskFilterControl";
 import AnchoredPopover from "./components/AnchoredPopover";
 import CustomDateInput from "./components/CustomDateInput";
@@ -100,6 +99,7 @@ const labels: Record<string, string> = {
   next7: "最近7天",
   inbox: "收集箱",
   all: "所有任务",
+  "agent-review": "Agent 待确认",
   calendar: "日历",
   completed: "已完成",
   trash: "回收站",
@@ -264,7 +264,6 @@ export default function App() {
   >(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const [quick, setQuick] = useState("");
   const [createDialog, setCreateDialog] = useState<{
     date: string | null;
     endDate?: string;
@@ -287,15 +286,13 @@ export default function App() {
   const [sort, setSort] = useState<"manual" | "priority" | "date" | "title">(
     "manual",
   );
-  const [navigationEditorOpen, setNavigationEditorOpen] = useState(false);
+  const [navigationEditing, setNavigationEditing] = useState(false);
   const [taskFilters, setTaskFilters] = useState<Partial<Record<ViewId, TaskViewFilter>>>({});
   const [helpOpen, setHelpOpen] = useState(false);
-  const [agentReviewOpen, setAgentReviewOpen] = useState(false);
   const [dragOverNav, setDragOverNav] = useState<string | null>(null);
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [draggingListId, setDraggingListId] = useState<string | null>(null);
   const [listDropTarget, setListDropTarget] = useState<ListMoveTarget | null>(null);
-  const quickRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const searchTargetId = useRef<string | null>(null);
   const latestSnapshot = useRef<Snapshot | null>(null);
@@ -311,8 +308,8 @@ export default function App() {
   useEffect(() => { listDraftId.current = typeof listDialog === "string" ? crypto.randomUUID() : ""; }, [typeof listDialog === "string" ? listDialog : null]);
   useEffect(() => { filterDraftId.current = filterDialog ? crypto.randomUUID() : ""; }, [filterDialog]);
   const unsubmittedForm = useRef(false);
-  unsubmittedForm.current = Boolean(createDialog || dateTask || listDialog || tagDialog || filterDialog || navigationEditorOpen || quick.trim());
-  const quickSubmitting = useRef(false);
+  unsubmittedForm.current = Boolean(createDialog || dateTask || listDialog || tagDialog || filterDialog || navigationEditing);
+  const creatingTask = useRef(false);
   const failedWrites = useRef(new Map<string, Operation>());
   const [failedWriteCount, setFailedWriteCount] = useState(0);
   const [retryingWrites, setRetryingWrites] = useState(false);
@@ -334,6 +331,8 @@ export default function App() {
       ? `${operation.type}:${operation.id}:${Object.keys(operation.patch || {}).sort().join(",")}`
       : operation.type === "settingsUpdate" || operation.type === "preferencesUpdate"
         ? `${operation.type}:${Object.keys(operation.patch || {}).sort().join(",")}`
+        : operation.type === "navigationUpdate" && Object.keys(operation.renames).length === 0
+          ? "navigationUpdate"
         : operation.type === "collectionUpsert" && operation.value && typeof operation.value === "object" && !Array.isArray(operation.value)
           ? `${operation.type}:${operation.collection}:${operation.value.id}` : JSON.stringify(operation);
     setSaveStatus("saving");
@@ -368,8 +367,7 @@ export default function App() {
     const report = (error: unknown) => { if (!canceled) setLoadError(errorMessage(error)); };
     void (async () => {
       keep(await watchNavigation((intent) => {
-        if (intent.view === "agent-review") setAgentReviewOpen(true);
-        else if (intent.view) { setAgentReviewOpen(false); setView(intent.view as ViewId); }
+        if (intent.view) { setView(intent.view as ViewId); setSelectedId(null); }
         if (intent.taskId) setSelectedId(intent.taskId);
       }));
       keep(await listen<{window: string}>("desktop://prepare-close", ({payload}) => {
@@ -475,6 +473,9 @@ export default function App() {
     setSidebarOpen(false);
     setContext(null);
   }, []);
+  const openNewTask = useCallback(() => {
+    setCreateDialog({date: view === "today" || view === "next7" ? localDate() : view === "calendar" ? anchor : null});
+  }, [view, anchor]);
   useEffect(() => {
     const targetId = searchTargetId.current;
     if (searchOpen || !targetId || selectedId !== targetId) return;
@@ -489,7 +490,6 @@ export default function App() {
     const key = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing || e.keyCode === 229) return;
       if (e.key === "Escape") {
-        setAgentReviewOpen(false);
         setCreateDialog(null);
         setDateTask(null);
         setSearchOpen(false);
@@ -501,7 +501,6 @@ export default function App() {
         setCalendarBacklogOpen(false);
         setHelpOpen(false);
         setSidebarOpen(false);
-        setNavigationEditorOpen(false);
         return;
       }
       if (e.ctrlKey || e.metaKey) {
@@ -511,7 +510,7 @@ export default function App() {
         }
         if (e.key.toLowerCase() === "n") {
           e.preventDefault();
-          setCreateDialog({ date: localDate() });
+          openNewTask();
         }
         if (["1", "2", "3", "4"].includes(e.key)) {
           e.preventDefault();
@@ -531,7 +530,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [go]);
+  }, [go, openNewTask]);
   const selected = data?.tasks.find((t) => t.id === selectedId) || null;
   const active =
     data?.tasks.filter((t) => !t.deletedAt && !t.completedAt && t.agentStatus !== "pending") || [];
@@ -624,19 +623,18 @@ export default function App() {
     return Array.from(result, ([label, tasks]) => ({ label, tasks }));
   }, [openTasks, doneTasks, view, showOnlyCompleted, taskFilter.dateField]);
 
-  async function addTaskFromInput(text: string, overrides: Partial<Task> & { defaultDueDate?: string | null } = {}) {
-    if (!text.trim() || quickSubmitting.current) return;
-    quickSubmitting.current = true;
+  async function addTaskFromInput(text: string, overrides: Partial<Task> & {defaultDueDate?: string | null} = {}) {
+    if (!text.trim() || creatingTask.current) return;
+    creatingTask.current = true;
     const {title: _title, defaultDueDate, ...explicit} = overrides;
     const tagDefaults = view.startsWith("tag:") ? {tags: [view.slice(4)]} : {};
     const receipt = await perform({type: "quickAdd", text, listId: explicit.listId || currentListId,
-      date: defaultDueDate !== undefined ? defaultDueDate || "none" : view === "today" ? localDate() : "none",
+      date: defaultDueDate || "none",
       overrides: {...tagDefaults, ...explicit}});
-    quickSubmitting.current = false;
+    creatingTask.current = false;
     if (!receipt) return;
     const result = receipt.result as {task?: Task; id?: string};
     if (result?.task?.id || result?.id) setSelectedId(result.task?.id || result.id || null);
-    setQuick("");
     return receipt;
   }
   async function trashTask(id: string) {
@@ -1014,8 +1012,9 @@ export default function App() {
         onSettings={setSettingsSection}
         onSearch={() => setSearchOpen(true)}
         onHelp={() => setHelpOpen(true)}
-        onEditNavigation={() => setNavigationEditorOpen(true)}
-        onAgentReview={() => setAgentReviewOpen(true)}
+        onSaveNavigation={async (preferences) => Boolean(await perform({type: "navigationUpdate", preferences, renames: {}}))}
+        onEditingChange={setNavigationEditing}
+        onAgentReview={() => go("agent-review")}
         todayCount={snapshot!.todayCount}
         pendingCount={snapshot!.pendingCount}
         onCloseSidebar={() => setSidebarOpen(false)}
@@ -1037,7 +1036,9 @@ export default function App() {
         <div className={view === "focus" ? "persistent-focus" : "hidden"}>
           <FocusView data={data} focus={snapshot!.focus} visible={view === "focus"} onCommand={perform} />
         </div>
-        {view === "calendar" ? (
+        {view === "agent-review" ? (
+          <AgentReviewPanel snapshot={snapshot!} onCommand={perform} onOpenSidebar={() => setSidebarOpen(true)}/>
+        ) : view === "calendar" ? (
           <CalendarView
             key={calendarKey}
             data={data}
@@ -1137,16 +1138,12 @@ export default function App() {
                 </IconButton>
               )}
               <div className="header-actions">
-                <IconButton
+                {!["completed", "trash"].includes(view) && <IconButton
                   label="添加任务 Ctrl+N"
-                  onClick={() =>
-                    setCreateDialog({
-                      date: view === "today" ? localDate() : null,
-                    })
-                  }
+                  onClick={openNewTask}
                 >
                   <Plus size={20} />
-                </IconButton>
+                </IconButton>}
                 <CustomSelect
                   className="sort-select"
                   ariaLabel="任务排序"
@@ -1177,29 +1174,6 @@ export default function App() {
                 <button type="button" onClick={clearTaskFilter}>清除筛选</button>
               </div>
             )}
-            {!["trash", "completed"].includes(view) && (
-              <form
-                className="quick-add"
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  addTaskFromInput(quick);
-                }}
-              >
-                <Plus size={18} />
-                <input
-                  ref={quickRef}
-                  aria-label="添加任务"
-                  placeholder="添加任务，回车即可保存"
-                  value={quick}
-                  onChange={(e) => setQuick(e.target.value)}
-                />
-                {quick && (
-                  <button type="submit" className="quick-save">
-                    添加
-                  </button>
-                )}
-              </form>
-            )}
             <div className="task-scroll">
               {groups.map((group, i) => (
                 <section className="task-group" key={`${group.label}-${i}`}>
@@ -1214,7 +1188,7 @@ export default function App() {
                           label={`在${group.label}添加任务`}
                           onClick={() =>
                             setCreateDialog({
-                              date: view === "today" ? localDate() : null,
+                              date: group.label === "已过期" ? localDate() : group.tasks[0]?.dueDate || null,
                             })
                           }
                         >
@@ -1278,7 +1252,7 @@ export default function App() {
                     <p>
                       {filterActive ? "试试调整日期范围或完成状态。" : view === "today"
                         ? "安排好每一件小事，留一点时间给自己。"
-                        : "在上方添加任务，或者点击 + 开始。"}
+                        : "点击右上角 ＋ 添加任务。"}
                     </p>
                     {filterActive && <button type="button" className="text-button" onClick={clearTaskFilter}>清除筛选</button>}
                   </div>
@@ -1458,6 +1432,7 @@ export default function App() {
           onNewList={() => setListDialog("list")}
           onCreate={async (input) => {
             if (await addTaskFromInput(input.title, input)) setCreateDialog(null);
+            else throw new Error("任务尚未保存，请检查提示后重试。");
           }}
         />
       )}
@@ -1492,12 +1467,6 @@ export default function App() {
           } : undefined}
         />
       )}
-      {navigationEditorOpen && <NavigationEditor data={data} onClose={() => setNavigationEditorOpen(false)} onSave={async (preferences, renames) => {
-        if (!await perform({type: "navigationUpdate", preferences, renames})) throw new Error("导航尚未保存，请检查提示后重试。");
-        setTaskFilters((filters) => Object.fromEntries(Object.entries(filters).map(([key, value]) => [key.startsWith("tag:") && renames[key] ? `tag:${renames[key].trim().replace(/^#+/, "").trim()}` : key, value])));
-        if (view.startsWith("tag:") && renames[view]) go(`tag:${renames[view].trim().replace(/^#+/, "").trim()}`);
-        setNavigationEditorOpen(false); setToast("已保存导航布局。");
-      }}/>}
       {tagDialog && (
         <TagDialog mode={tagDialog.mode} initialName={tagDialog.name} onClose={() => setTagDialog(null)}
           onSave={async (rawName) => {
@@ -1619,9 +1588,6 @@ export default function App() {
           }}
         />
       )}
-      {agentReviewOpen && snapshot && (
-        <AgentReviewPanel snapshot={snapshot} onClose={() => setAgentReviewOpen(false)} onCommand={perform}/>
-      )}
       {helpOpen && (
         <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}>
           <div
@@ -1678,7 +1644,7 @@ export default function App() {
           e.target.value = "";
         }}
       />
-      {failedWriteCount > 0 && <div className="save-recovery" role="alert">
+      {failedWriteCount > 0 && !navigationEditing && <div className="save-recovery" role="alert">
         <span>{failedWriteCount} 项操作尚未确认保存</span>
         <button disabled={retryingWrites} onClick={() => void retryFailedWrites()}>{retryingWrites ? "正在重试…" : "重试保存"}</button>
         <button disabled={retryingWrites} onClick={() => void discardFailedWrites()}>放弃重试</button>
@@ -2509,37 +2475,44 @@ function NewTaskDialog({
   endDate?: string;
   defaultTime?: string;
   onClose: () => void;
-  onCreate: (task: Partial<Task> & { title: string }) => Promise<void>;
+  onCreate: (task: Partial<Task> & { title: string; defaultDueDate?: string | null }) => Promise<void>;
   onNewList?: () => void;
 }) {
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [due, setDue] = useState(endDate || date || "");
+  const [dateEdited, setDateEdited] = useState(Boolean(endDate));
   const [list, setList] = useState(defaultList);
   const [priority, setPriority] = useState<Priority>(0);
   const [time, setTime] = useState(defaultTime || "");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // The core parses the title. Only an explicit date selection overrides it;
+  // the page's date is a fallback, so “明天开会” still means tomorrow on Today.
+  const displayedDate = dateEdited ? due : parseQuickInput(title, list).dueDate || due;
   return (
     <div className="modal-backdrop" onMouseDown={onClose}>
       <form
         className="dialog new-task-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="new-task-title"
         onMouseDown={(e) => e.stopPropagation()}
         onSubmit={async (e) => {
           e.preventDefault();
           if (!title.trim() || submitting) return;
-          if (endDate && date && due && date > due) { setError("结束日期不能早于开始日期。"); return; }
+          if (endDate && date && displayedDate && date > displayedDate) { setError("结束日期不能早于开始日期。"); return; }
           setSubmitting(true); setError("");
           try {
-            await onCreate({title, content, listId: list,
-              ...(due ? {dueDate: due} : {}), ...(endDate ? {startDate: date} : {}),
+            await onCreate({title, content, listId: list, defaultDueDate: endDate || date,
+              ...(dateEdited ? {dueDate: due || null} : {}), ...(endDate ? {startDate: date} : {}),
               ...(time ? {time} : {}), ...(priority ? {priority} : {})});
           } catch (error) { setError(errorMessage(error)); }
           finally { setSubmitting(false); }
         }}
       >
         <div className="dialog-header">
-          <h2>添加任务</h2>
+          <h2 id="new-task-title">添加任务</h2>
           <IconButton label="关闭" onClick={onClose}>
             <X size={18} />
           </IconButton>
@@ -2565,9 +2538,9 @@ function NewTaskDialog({
           <label>
             <CalendarDays size={15} />
             <CustomDateInput
-              value={due}
+              value={displayedDate}
               ariaLabel="新任务日期"
-              onChange={setDue}
+              onChange={(value) => { setDue(value); setDateEdited(true); }}
             />
           </label>
           <label>
@@ -2593,7 +2566,7 @@ function NewTaskDialog({
             />
           </div>
         </div>
-        <TaskDateHint date={due || parseQuickInput(title, list).dueDate || null} />
+        <TaskDateHint date={displayedDate || null} />
         {error && (
           <p className="form-error" role="alert">
             {error}

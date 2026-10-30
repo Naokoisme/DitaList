@@ -67,6 +67,7 @@ async function open(entry = "", state = fixture(), clockAt?: number): Promise<Pa
           f.receipts[c.requestId] = receipt;
           if (c.operation.type === "taskUpdate") Object.assign(f.snapshot.data.tasks.find((task: any) => task.id === c.operation.id), c.operation.patch);
           if (c.operation.type === "settingsUpdate") Object.assign(f.snapshot.data.settings, c.operation.patch);
+          if (c.operation.type === "navigationUpdate") f.snapshot.data.settings.navigation = structuredClone(c.operation.preferences);
           f.emit("core://changed", structuredClone(f.snapshot));
           return receipt;
         }
@@ -90,10 +91,14 @@ test("pending Agent changes remain quiet until opened; approval uses the proposa
   const page = await open();
   try {
     assert.equal(await page.getByRole("heading", {name: "所有任务", exact: true}).count(), 1);
-    assert.equal(await page.getByRole("dialog", {name: "Agent 待确认"}).count(), 0);
+    assert.equal(await page.getByRole("region", {name: "Agent 待确认"}).count(), 0);
     assert.equal(await page.locator('.task-row[data-task-id="pending"]').count(), 0);
     await page.getByRole("button", {name: /Agent 待确认/}).click();
-    await page.getByRole("dialog", {name: "Agent 待确认"}).waitFor();
+    await page.getByRole("region", {name: "Agent 待确认"}).waitFor();
+    assert.equal(await page.getByRole("dialog", {name: "Agent 待确认"}).count(), 0);
+    assert.equal(await page.getByRole("heading", {name: "所有任务", exact: true}).count(), 0);
+    assert.equal(await page.getByRole("button", {name: "添加任务 Ctrl+N", exact: true}).count(), 0);
+    assert.equal(await page.getByRole("textbox").count(), 0);
     assert.equal(await page.locator(".approval-diff del").first().textContent(), "准备周报");
     assert.equal(await page.locator(".approval-diff ins").first().textContent(), "整理项目周报");
     await page.screenshot({path: "tests/web-evidence/agent-review-light.png"});
@@ -103,13 +108,92 @@ test("pending Agent changes remain quiet until opened; approval uses the proposa
   } finally { await page.close(); }
 });
 
-test("main quick input explicitly stays undated outside Today", async () => {
+test("task pages have no inline input and Plus opens the shared task form with clear date defaults", async () => {
   const page = await open();
   try {
-    await page.getByRole("textbox", {name: "添加任务", exact: true}).fill("普通无日期任务");
-    await page.getByRole("textbox", {name: "添加任务", exact: true}).press("Enter");
+    for (const view of ["all", "inbox", "today", "next7"]) {
+      await page.locator(`[data-nav-id="${view}"]`).click();
+      assert.equal(await page.locator(".quick-add").count(), 0);
+      assert.equal(await page.getByRole("textbox").count(), 0);
+      await page.getByRole("button", {name: "添加任务 Ctrl+N", exact: true}).click();
+      await page.getByRole("textbox", {name: "新任务标题", exact: true}).fill(`统一入口 ${view}`);
+      const expected = view === "today" || view === "next7" ? localDate() : "";
+      assert.equal(await page.getByRole("textbox", {name: "新任务日期", exact: true}).inputValue(), expected);
+      await page.locator(".new-task-dialog").getByRole("button", {name: "添加", exact: true}).click();
+      await page.locator(".new-task-dialog").waitFor({state: "detached"});
+      const operation = await page.evaluate(() => (window as any).__fixture.commands.at(-1).operation);
+      assert.equal(operation.type, "quickAdd");
+      assert.equal(operation.date, expected || "none");
+      assert.equal(operation.listId, "inbox");
+      assert.equal(operation.overrides.dueDate, undefined);
+    }
+  } finally { await page.close(); }
+});
+
+test("Ctrl+N follows the same view context; clearing Today date stays undated", async () => {
+  const page = await open();
+  try {
+    await page.locator('[data-nav-id="today"]').click();
+    await page.keyboard.press("Control+n");
+    await page.getByRole("textbox", {name: "新任务标题", exact: true}).fill("取消默认日期");
+    await page.getByRole("textbox", {name: "新任务日期", exact: true}).fill("");
+    await page.locator(".new-task-dialog").getByRole("button", {name: "添加", exact: true}).click();
     await page.waitForFunction(() => (window as any).__fixture.commands.length === 1);
-    assert.equal(await page.evaluate(() => (window as any).__fixture.commands[0].operation.date), "none");
+    const operation = await page.evaluate(() => (window as any).__fixture.commands[0].operation);
+    assert.equal(operation.date, localDate());
+    assert.equal(operation.overrides.dueDate, null);
+    await page.locator('[data-nav-id="all"]').click();
+    await page.keyboard.press("Control+n");
+    assert.equal(await page.getByRole("textbox", {name: "新任务日期", exact: true}).inputValue(), "");
+  } finally { await page.close(); }
+});
+
+test("Chinese task dates override page defaults while an explicit date selection wins", async () => {
+  const state = fixture(); state.data.settings.defaultView = "today";
+  const page = await open("", state);
+  try {
+    await page.getByRole("button", {name: "添加任务 Ctrl+N", exact: true}).click();
+    await page.getByRole("textbox", {name: "新任务标题", exact: true}).fill("明天开会");
+    assert.equal(await page.getByRole("textbox", {name: "新任务日期", exact: true}).inputValue(), addDays(localDate(), 1));
+    await page.locator(".new-task-dialog").getByRole("button", {name: "添加", exact: true}).click();
+    await page.locator(".new-task-dialog").waitFor({state: "detached"});
+    const parsed = await page.evaluate(() => (window as any).__fixture.commands[0].operation);
+    assert.equal(parsed.date, localDate());
+    assert.equal(parsed.overrides.dueDate, undefined);
+    await page.getByRole("button", {name: "添加任务 Ctrl+N", exact: true}).click();
+    await page.getByRole("textbox", {name: "新任务标题", exact: true}).fill("明天开会");
+    await page.getByRole("textbox", {name: "新任务日期", exact: true}).fill(addDays(localDate(), 3));
+    await page.locator(".new-task-dialog").getByRole("button", {name: "添加", exact: true}).click();
+    await page.locator(".new-task-dialog").waitFor({state: "detached"});
+    assert.equal(await page.evaluate(() => (window as any).__fixture.commands[1].operation.overrides.dueDate), addDays(localDate(), 3));
+  } finally { await page.close(); }
+});
+
+test("overdue group Plus creates for today instead of inheriting an arbitrary past date", async () => {
+  const state = fixture(); state.data.tasks[0].dueDate = addDays(localDate(), -4);
+  const page = await open("", state);
+  try {
+    await page.locator(".group-heading.overdue button").click();
+    assert.equal(await page.getByRole("textbox", {name: "新任务日期", exact: true}).inputValue(), localDate());
+  } finally { await page.close(); }
+});
+
+test("date group Plus uses that group date and failed save retains the task form", async () => {
+  const state = fixture(); const tomorrow = addDays(localDate(), 1);
+  state.data.tasks[0].dueDate = tomorrow;
+  const page = await open("", state);
+  try {
+    await page.locator(".group-heading button").first().click();
+    assert.equal(await page.getByRole("textbox", {name: "新任务日期", exact: true}).inputValue(), tomorrow);
+    await page.getByRole("textbox", {name: "新任务标题", exact: true}).fill("失败后保留的新任务");
+    await page.evaluate(() => { (window as any).__fixture.failures.quickAdd = 1; });
+    await page.locator(".new-task-dialog").getByRole("button", {name: "添加", exact: true}).click();
+    await page.locator(".new-task-dialog").getByRole("alert").waitFor();
+    assert.equal(await page.getByRole("textbox", {name: "新任务标题", exact: true}).inputValue(), "失败后保留的新任务");
+    await page.locator(".new-task-dialog").getByRole("button", {name: "添加", exact: true}).click();
+    await page.locator(".new-task-dialog").waitFor({state: "detached"});
+    const commands = await page.evaluate(() => (window as any).__fixture.commands);
+    assert.equal(commands[0].requestId, commands[1].requestId);
   } finally { await page.close(); }
 });
 
@@ -140,13 +224,14 @@ test("paused focus keeps the original target and title until reset", async () =>
 test("main exit refuses unsubmitted input, flushes detail edits and unlocks on cancellation", async () => {
   const page = await open();
   try {
-    const quick = page.getByRole("textbox", {name: "添加任务", exact: true});
+    await page.getByRole("button", {name: "添加任务 Ctrl+N", exact: true}).click();
+    const quick = page.getByRole("textbox", {name: "新任务标题", exact: true});
     await quick.fill("尚未提交");
     await page.evaluate(() => (window as any).__fixture.emit("desktop://prepare-exit", {window: "main"}));
     await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === "exitReady"));
     assert.deepEqual(await page.evaluate(() => (window as any).__fixture.actions.find((item: any) => item.action === "exitReady").payload), {window: "main", ready: false});
     await page.evaluate(() => { const f = (window as any).__fixture; f.emit("desktop://exit-cancelled", {}); f.actions = []; });
-    await quick.fill("");
+    await page.locator(".new-task-dialog").getByRole("button", {name: "取消", exact: true}).click();
     await page.locator('.task-row[data-task-id="existing"]').click();
     await page.getByRole("textbox", {name: "任务标题", exact: true}).fill("退出前必须保存的标题");
     await page.evaluate(() => (window as any).__fixture.emit("desktop://prepare-exit", {window: "main"}));
@@ -225,7 +310,7 @@ test("focus displays authoritative time and MCP closing keeps its toggle disable
     await page.getByRole("button", {name: "暂停", exact: true}).click();
     assert.deepEqual(await page.evaluate(() => (window as any).__fixture.commands[0].operation), {type: "focus", action: "pause", taskId: "existing"});
     await page.screenshot({path: "tests/web-evidence/focus-dark.png"});
-    await page.locator(".rail-bottom").getByRole("button", {name: "设置", exact: true}).click();
+    await page.locator(".navigation-settings").click();
     await page.getByRole("button", {name: "Agent / MCP", exact: true}).click();
     await page.locator(".mcp-config").waitFor();
     assert.match(await page.locator(".mcp-config").textContent() || "", /ditalist-mcp\.exe/);
@@ -298,7 +383,7 @@ test("subtask blur and immediate completion preserve both edits in queued core o
   } finally { await page.close(); }
 });
 
-test("navigation restores ordering and hidden items; editor sends one atomic rename operation", async () => {
+test("navigation restores existing ordering and hidden items", async () => {
   const state = fixture();
   state.data.lists.push({id: "work", name: "工作清单", color: "#4772fa", folderId: null, archived: false, sortOrder: 0});
   state.data.settings.navigation = {orders: {sidebar: ["all", "today", "inbox"]}, hidden: ["inbox"]};
@@ -306,19 +391,27 @@ test("navigation restores ordering and hidden items; editor sends one atomic ren
   try {
     const navIds = await page.locator(".navigation-system-entry [data-nav-id]").evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-nav-id")));
     assert.deepEqual(navIds.slice(0, 2), ["all", "today"]); assert.equal(navIds.includes("inbox"), false);
-    await page.getByRole("button", {name: "编辑导航", exact: true}).first().click();
-    const editor = page.getByRole("dialog", {name: "编辑导航", exact: true});
-    await editor.getByRole("textbox", {name: "工作清单 名称"}).fill("项目清单");
-    await editor.getByRole("button", {name: "显示 收集箱", exact: true}).click();
-    await editor.getByRole("button", {name: "上移 今天", exact: true}).click();
-    await page.screenshot({path: "tests/web-evidence/navigation-editor.png"});
-    await editor.getByRole("button", {name: "保存", exact: true}).click();
-    await page.waitForFunction(() => (window as any).__fixture.commands.length === 1);
-    const operation = await page.evaluate(() => (window as any).__fixture.commands[0].operation);
-    assert.equal(operation.type, "navigationUpdate");
-    assert.deepEqual(operation.renames, {"list:work": "项目清单"});
-    assert.deepEqual(operation.preferences.orders.sidebar.slice(0, 2), ["today", "all"]);
-    assert.equal(operation.preferences.hidden.includes("inbox"), false);
+    assert.equal(await page.getByRole("button", {name: "编辑导航", exact: true}).count(), 0);
+    assert.equal(await page.getByRole("dialog", {name: "编辑导航", exact: true}).count(), 0);
+  } finally { await page.close(); }
+});
+
+test("a newer successful navigation layout supersedes the failed save and unlocks exit", async () => {
+  const page = await open();
+  try {
+    await page.locator('[data-nav-id="today"]').click({button: "right"});
+    await page.getByRole("button", {name: "隐藏今天", exact: true}).click();
+    await page.evaluate(() => { (window as any).__fixture.failures.navigationUpdate = 1; });
+    await page.getByRole("region", {name: "整理导航"}).getByRole("button", {name: "完成", exact: true}).click();
+    await page.getByRole("region", {name: "整理导航"}).getByRole("alert").waitFor();
+    await page.getByRole("button", {name: "显示今天", exact: true}).click();
+    await page.getByRole("button", {name: "隐藏最近7天", exact: true}).click();
+    await page.getByRole("region", {name: "整理导航"}).getByRole("button", {name: "完成", exact: true}).click();
+    await page.getByRole("region", {name: "整理导航"}).waitFor({state: "detached"});
+    assert.equal(await page.locator(".save-recovery").count(), 0);
+    assert.deepEqual(await page.evaluate(() => (window as any).__fixture.snapshot.data.settings.navigation.hidden), ["next7"]);
+    await page.evaluate(() => (window as any).__fixture.emit("desktop://prepare-exit", {window: "main"}));
+    await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === "exitReady" && item.payload.ready));
   } finally { await page.close(); }
 });
 

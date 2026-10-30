@@ -26,7 +26,7 @@
 - `desktop_action({action, payload?})`：openMain（payload.view）、openQuick、closeQuick、minimize、maximize、closeMain、showReminders、quit、revealData、createShortcut、removeShortcut。
 - `mcp_info()` -> McpInfo；开启/关闭经 PreferencesUpdate，通道状态监听 `mcp://state`。
 - `backup_export()` -> bool（保存对话框）；`backup_import()` -> string|null（读取 JSON/CSV）。导入后用 Import 命令处理。
-- 主界面监听 `desktop://navigate` 的 `{view, taskId?}`；审核 view 为 agent-review。
+- 主界面监听 `desktop://navigate` 的 `{view, taskId?}`；审核 view 为 agent-review，对应主窗口中的独立审核页，不覆盖任务列表弹窗。
 - `desktop_status()` -> `{ floatingVisible, shortcutExists, dataPath, backupPath }`。
 - 显式退出先发 `desktop://prepare-exit` `{window}`，Web 交接并回复 `desktop_action("exitReady",{window,ready})`，确认前不销毁窗口。拒绝／超时会取消退出并发 `desktop://exit-cancelled` 恢复输入；宿主随后关闭受理门禁、等待在途写和 MCP 收尾。
 - Web 挂载后 `desktop_action({action:"ready",payload:{window:"main"|"quick"}})` 才显示；输入 resize 使用 action=`quickResize`、payload=`{width,height}`。监听 `desktop://prepare-close` 的 `{window}`，先交接草稿/编辑内容后调用 closeMain/closeQuick。ListMove 操作按共享枚举一次完成排序。
@@ -42,6 +42,8 @@
 ## 导航增量与失败终态
 
 `Settings.navigation` 缺省为空排序／隐藏；`NavigationUpdate` 一次提交 preferences 和 renames。标签互换、过滤器完整词、任务标签和导航键由核心原子改写。新建主窗使用 defaultView；已存活主窗没有显式导航时保持原视图。
+
+导航长按后在原位置预览整理，完成时使用 `NavigationUpdate` 保存，取消不提交；`agent-review` 与其他侧栏入口使用相同排序/隐藏合同。固定齿轮设置入口忽略旧 `rail:settings` 隐藏偏好。主界面取消常驻任务输入，所有新增面板沿用 `QuickAdd` 的解析与保存规则，提交的日期来自可见表单，详见 [安装反馈调整](feedback-20261030.md)。
 
 MCP 已受理但保存失败的操作保留原参数。关闭时重试，仍为存储错误则显示 closing_failed；若操作已因用户本地改动变成版本冲突等业务终态，核心 `settle_rejected` 持久化 `status=rejected` 和 result.error 后完成关闭，原请求仍可查询，不会无限重试。
 
