@@ -417,6 +417,7 @@
 }
 .cal-options {
   position: relative;
+  -webkit-app-region: no-drag;
 }
 .cal-options-menu {
   position: absolute;

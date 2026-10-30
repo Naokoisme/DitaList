@@ -276,6 +276,7 @@ export default function App() {
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const quickRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const searchTargetId = useRef<string | null>(null);
   const loaded = useRef(false);
   const latestData = useRef<AppData | null>(null);
   const saveRevision = useRef(0);
@@ -435,7 +436,8 @@ export default function App() {
     (id: string) =>
       update((s) => {
         const t = s.tasks.find((x) => x.id === id);
-        return t?.completedAt
+        if (!t || t.deletedAt) return s;
+        return t.completedAt
           ? {
               ...s,
               tasks: s.tasks.map((x) =>
@@ -454,6 +456,16 @@ export default function App() {
     setSidebarOpen(false);
     setContext(null);
   }, []);
+  useEffect(() => {
+    const targetId = searchTargetId.current;
+    if (searchOpen || !targetId || selectedId !== targetId) return;
+    const row = document.querySelector<HTMLElement>(
+      `.task-row[data-task-id="${CSS.escape(targetId)}"]`,
+    );
+    row?.scrollIntoView({ block: "nearest" });
+    row?.focus({ preventScroll: true });
+    searchTargetId.current = null;
+  }, [searchOpen, selectedId, view]);
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -716,6 +728,12 @@ export default function App() {
     if (selectedId === id) setSelectedId(null);
     setContext(null);
     setToast("任务已移到垃圾桶，可在垃圾桶恢复。");
+  }
+  function restoreTask(id: string) {
+    patchTask(id, { deletedAt: null });
+    if (selectedId === id) setSelectedId(null);
+    setContext(null);
+    setToast("任务已恢复。");
   }
   async function importText(text: string) {
     if (!data) return;
@@ -1521,6 +1539,8 @@ export default function App() {
                               : t,
                           ),
                         }));
+                        setSelectedId(null);
+                        setContext(null);
                         setToast("已恢复垃圾桶中的任务。");
                       }}
                     >
@@ -1595,7 +1615,7 @@ export default function App() {
           onClose={() => setSelectedId(null)}
           onDate={() => setDateTask(selected)}
           onTrash={() => trashTask(selected.id)}
-          onRestore={() => patchTask(selected.id, { deletedAt: null })}
+          onRestore={() => restoreTask(selected.id)}
           onNewList={() => setListDialog("list")}
           onToast={setToast}
         />
@@ -1612,6 +1632,8 @@ export default function App() {
             return (
               <>
                 <button
+                  disabled={!!task.deletedAt}
+                  title={task.deletedAt ? "恢复任务后可修改完成状态" : undefined}
                   onClick={() => {
                     toggle(task.id);
                     setContext(null);
@@ -1682,10 +1704,7 @@ export default function App() {
                 <div className="menu-divider" />
                 {task.deletedAt ? (
                   <button
-                    onClick={() => {
-                      patchTask(task.id, { deletedAt: null });
-                      setContext(null);
-                    }}
+                    onClick={() => restoreTask(task.id)}
                   >
                     <RotateCcw size={15} />
                     恢复任务
@@ -1921,6 +1940,19 @@ export default function App() {
                     <button
                       key={t.id}
                       onClick={() => {
+                        const list = data.lists.find(
+                          (l) => l.id === t.listId && !l.archived,
+                        );
+                        go(
+                          t.completedAt
+                            ? "completed"
+                            : t.listId === "inbox"
+                              ? "inbox"
+                              : list
+                                ? `list:${list.id}`
+                                : "all",
+                        );
+                        searchTargetId.current = t.id;
                         setSearchOpen(false);
                         setSelectedId(t.id);
                       }}
@@ -2351,7 +2383,7 @@ function TaskRow({
         if (e.key === "Enter") onSelect();
         if (e.key === " ") {
           e.preventDefault();
-          onToggle();
+          if (!task.deletedAt) onToggle();
         }
       }}
       data-task-id={task.id}
@@ -2359,6 +2391,8 @@ function TaskRow({
       <button
         className={`task-check p${task.priority} ${task.completedAt ? "checked" : ""}`}
         aria-label={`${task.completedAt ? "取消完成" : "完成"} ${task.title}`}
+        disabled={!!task.deletedAt}
+        title={task.deletedAt ? "恢复任务后可修改完成状态" : undefined}
         onClick={(e) => {
           e.stopPropagation();
           onToggle();
@@ -2453,6 +2487,8 @@ function TaskDetail({
         <button
           className={`task-check p${task.priority} ${task.completedAt ? "checked" : ""}`}
           aria-label={task.completedAt ? "取消完成任务" : "完成任务"}
+          disabled={!!task.deletedAt}
+          title={task.deletedAt ? "恢复任务后可修改完成状态" : undefined}
           onClick={onToggle}
         >
           {task.completedAt && <Check size={12} />}

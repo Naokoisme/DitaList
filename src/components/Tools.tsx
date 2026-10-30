@@ -161,41 +161,49 @@ export function FocusView({
   const deadline = useRef(0);
   const start = useRef<Date | null>(null);
   const elapsed = useRef(0);
+  const sessionId = useRef<string | null>(null);
+  const cancelTimer = useRef<() => void>(() => {});
   const activeTasks = data.tasks.filter((t) => !t.deletedAt && !t.completedAt);
   function saveSession(completed: boolean, seconds: number) {
-    if (mode !== "focus" || seconds < 1) return;
+    const id = sessionId.current;
+    if (!id || mode !== "focus" || seconds < 1) return;
+    sessionId.current = null;
     const endedAt = new Date();
-    onUpdate((s) => ({
-      ...s,
-      focusSessions: [
-        ...s.focusSessions,
-        {
-          id: crypto.randomUUID(),
-          taskId: taskId || null,
-          title: s.tasks.find((t) => t.id === taskId)?.title || "自由专注",
-          startedAt: (
-            start.current || new Date(endedAt.getTime() - seconds * 1000)
-          ).toISOString(),
-          endedAt: endedAt.toISOString(),
-          durationSeconds: Math.round(seconds),
-          completed,
-        },
-      ],
-    }));
+    // Capture the session before React runs the updater and the timer refs reset.
+    const session = {
+      id,
+      taskId: taskId || null,
+      title: data.tasks.find((t) => t.id === taskId)?.title || "自由专注",
+      startedAt: (
+        start.current || new Date(endedAt.getTime() - seconds * 1000)
+      ).toISOString(),
+      endedAt: endedAt.toISOString(),
+      durationSeconds: Math.round(seconds),
+      completed,
+    };
+    onUpdate((s) =>
+      s.focusSessions.some((entry) => entry.id === id)
+        ? s
+        : { ...s, focusSessions: [...s.focusSessions, session] },
+    );
   }
   useEffect(() => {
     if (!running) return;
+    let stopped = false;
     const interval = setInterval(() => {
+      if (stopped) return;
       const left = Math.max(
         0,
         Math.ceil((deadline.current - Date.now()) / 1000),
       );
       setRemaining(left);
       if (left === 0) {
+        stopTimer();
         setRunning(false);
         saveSession(true, sessionDuration.current);
         elapsed.current = 0;
         start.current = null;
+        sessionId.current = null;
         setMessage(
           mode === "focus"
             ? "本次专注已完成，休息一下吧。"
@@ -228,7 +236,13 @@ export function FocusView({
           );
       }
     }, 200);
-    return () => clearInterval(interval);
+    function stopTimer() {
+      // Invalidate queued callbacks immediately; effect cleanup may run later.
+      stopped = true;
+      clearInterval(interval);
+    }
+    cancelTimer.current = stopTimer;
+    return stopTimer;
   }, [
     running,
     mode,
@@ -247,11 +261,13 @@ export function FocusView({
   }, [mode, data.settings.pomodoroMinutes, data.settings.breakMinutes]);
   function changeMode(next: "focus" | "break") {
     if (next === mode) return;
+    cancelTimer.current();
     if (start.current && remaining < sessionDuration.current)
       saveSession(false, sessionDuration.current - remaining);
     setRunning(false);
     elapsed.current = 0;
     start.current = null;
+    sessionId.current = null;
     setMode(next);
   }
   const todaySessions = data.focusSessions.filter(
@@ -323,6 +339,7 @@ export function FocusView({
             className="icon-button"
             title="重置计时"
             onClick={() => {
+              cancelTimer.current();
               if (running || elapsed.current) {
                 saveSession(false, sessionDuration.current - remaining);
               }
@@ -331,6 +348,7 @@ export function FocusView({
               setRemaining(sessionDuration.current);
               elapsed.current = 0;
               start.current = null;
+              sessionId.current = null;
               setMessage("");
             }}
           >
@@ -339,6 +357,7 @@ export function FocusView({
           <button
             className="primary-button timer-start"
             onClick={() => {
+              cancelTimer.current();
               if (running) {
                 elapsed.current = sessionDuration.current - remaining;
                 setRunning(false);
@@ -346,6 +365,7 @@ export function FocusView({
                 if (!start.current) {
                   sessionDuration.current = duration();
                   setRemaining(sessionDuration.current);
+                  sessionId.current = crypto.randomUUID();
                 }
                 const secs = start.current
                   ? remaining
