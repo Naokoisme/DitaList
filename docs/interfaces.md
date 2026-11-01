@@ -41,6 +41,8 @@
 
 贴边后原生栏收为 4 DIP 白色细线，移入展开、移出 500ms 后收起；保留圆角和 180ms 原生过渡，过渡结束或取消即停止计时。完整矩形独立于细线及过渡矩形，供数量／DPI 变化与快速输入定位使用；提醒面板、输入和拖动期间暂停收起。展开／细线／自由悬浮切换通过内部 `BarPresentation` 消息写入 `runtime.jsonl` 的 `native_bar` 事件，仅记录完成后的状态和窗口边界，不新增业务接口。
 
+原生栏所有按钮及空白共用按下、捕获、系统拖动阈值和释放判定。拖动后不派发按钮操作；短按、键盘和辅助激活保留原入口。主界面使用 Windows 显示／还原，`ready(main)` 表示业务界面已就绪；冷开此前保持隐藏。取消或超时释放与正常就绪共享窗口交接锁，迟到 ready 不重新打开已关闭／最小化的窗口。窗口观测通过 `MainWindowObservation` 写入 `main_window`，包含 requested、ready、shown 及请求耗时。
+
 ## 导航增量与失败终态
 
 `Settings.navigation` 缺省为空排序／隐藏；`NavigationUpdate` 一次提交 preferences 和 renames。标签互换、过滤器完整词、任务标签和导航键由核心原子改写。新建主窗使用 defaultView；已存活主窗没有显式导航时保持原视图。

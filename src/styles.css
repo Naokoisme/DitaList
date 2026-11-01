@@ -72,32 +72,6 @@ html[data-main-maximized="true"] #main-window-surface { border-radius: 0; }
 html:has(#main-window-surface), body:has(#main-window-surface) {
   background: transparent;
 }
-html[data-main-motion] #main-window-surface {
-  will-change: left, top, width, height, border-radius;
-}
-html[data-main-motion] #main-window-content {
-  will-change: transform, opacity;
-}
-#main-window-bar-origin {
-  display: none;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  align-items: center;
-  white-space: nowrap;
-  pointer-events: none;
-  color: var(--text);
-  font-size: 14px;
-}
-#main-window-bar-origin span {
-  display: inline-flex;
-  height: 100%;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-#main-window-bar-origin .accent { color: var(--accent); }
 button,
 input,
 select,

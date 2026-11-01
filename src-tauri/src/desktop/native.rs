@@ -44,6 +44,7 @@ const UPDATE: u32 = WM_APP + 41;
 const DEFERRED: u32 = WM_APP + 42;
 const POINTER_CHANGED: u32 = WM_APP + 43;
 const FINISH_REVEAL: u32 = WM_APP + 44;
+const PRESS_BAR_BUTTON: u32 = WM_APP + 45;
 const REDRAW: u32 = 1;
 const RELAYOUT: u32 = 2;
 const DRAIN: u32 = 4;
@@ -67,10 +68,8 @@ const DISMISS: usize = 24;
 
 #[derive(Clone, Copy)]
 pub struct Anchor {
-    pub left: f64,
     pub right: f64,
     pub top: f64,
-    pub bottom: f64,
     pub scale: f64,
     pub work_x: f64,
     pub work_y: f64,
@@ -80,10 +79,8 @@ pub struct Anchor {
 impl Default for Anchor {
     fn default() -> Self {
         Self {
-            left: 820.,
             right: 1000.,
             top: 700.,
-            bottom: 740.,
             scale: 1.,
             work_x: 0.,
             work_y: 0.,
@@ -96,7 +93,6 @@ impl Default for Anchor {
 pub enum NativeCommand {
     Snapshot(Box<CoreSnapshot>),
     InputActive(bool),
-    MainTransition(bool),
     HoldForMain(bool),
     ShowReminders,
     BeginDrag { x: i32, y: i32 },
@@ -166,8 +162,12 @@ pub fn start(actions: mpsc::Sender<DesktopAction>) -> Result<NativeHandle, Strin
                         }
                         if message.message == WM_KEYDOWN && message.wParam.0 == VK_ESCAPE.0 as usize
                         {
-                            owner.runtime.borrow_mut().hide_panel();
-                            owner.flush(owner.runtime.borrow().bar);
+                            let mut runtime = owner.runtime.borrow_mut();
+                            runtime.cancel_bar_press();
+                            runtime.hide_panel();
+                            let bar = runtime.bar;
+                            drop(runtime);
+                            owner.flush(bar);
                             continue;
                         }
                         let dialog = {
@@ -265,6 +265,12 @@ enum Panel {
     Reminder { id: String, automatic: bool },
     Agent { automatic: bool },
 }
+#[derive(Clone, Copy)]
+struct BarPress {
+    id: usize,
+    origin: POINT,
+    click_bounds: RECT,
+}
 struct Runtime {
     bar: HWND,
     panel: HWND,
@@ -276,7 +282,6 @@ struct Runtime {
     actions: mpsc::Sender<DesktopAction>,
     snapshot: Option<CoreSnapshot>,
     input_active: bool,
-    main_transition: bool,
     held_for_main: bool,
     dragging: bool,
     dock: Dock,
@@ -288,7 +293,7 @@ struct Runtime {
     motion_surface: Option<motion::Surface>,
     static_redraw: bool,
     show_after_layout: bool,
-    motion_press: Option<(usize, POINT)>,
+    motion_press: Option<BarPress>,
     ignore_reveal_at: Option<POINT>,
     panel_state: Panel,
     panel_painted: bool,
@@ -397,7 +402,6 @@ impl Runtime {
                     actions,
                     snapshot: None,
                     input_active: false,
-                    main_transition: false,
                     held_for_main: false,
                     dragging: false,
                     dock: Dock::default(),
@@ -634,22 +638,6 @@ impl Runtime {
                         }
                         self.refresh(true);
                     }
-                    NativeCommand::MainTransition(active) => {
-                        if active {
-                            let _ = ShowWindow(self.bar, SW_HIDE);
-                            self.show_after_layout = false;
-                        }
-                        self.stop_transition();
-                        self.main_transition = active;
-                        if active {
-                            self.hide_panel();
-                            self.cancel_edge_hide();
-                        }
-                        self.refresh(true);
-                        if !active && !cursor_inside(self.bar) {
-                            self.schedule_edge_hide();
-                        }
-                    }
                     NativeCommand::HoldForMain(held) => {
                         self.held_for_main = held;
                         if held {
@@ -708,9 +696,7 @@ impl Runtime {
             let Some(snapshot) = self.snapshot.as_ref() else {
                 return;
             };
-            let visible = snapshot.preferences.floating_visible
-                && !self.input_active
-                && !self.main_transition;
+            let visible = snapshot.preferences.floating_visible && !self.input_active;
             let pending = snapshot.pending_count;
             let notify_agent = self.last_pending.is_some_and(|old| pending > old);
             self.last_pending = Some(pending);
@@ -917,10 +903,8 @@ impl Runtime {
             let rect = self.expanded_rect;
             let work = work_area(self.bar);
             *self.anchor.lock().unwrap_or_else(|e| e.into_inner()) = Anchor {
-                left: rect.left as f64,
                 right: rect.right as f64,
                 top: rect.top as f64,
-                bottom: rect.bottom as f64,
                 scale: (self.dpi / 96.) as f64,
                 work_x: work.left as f64,
                 work_y: work.top as f64,
@@ -1061,53 +1045,91 @@ impl Runtime {
         self.dock.is_docked()
             && !self.collapsed
             && !self.dragging
+            && self.motion_press.is_none()
             && !self.input_active
-            && !self.main_transition
             && !self.held_for_main
             && !keyboard_focus
             && matches!(self.panel_state, Panel::None)
     }
 
-    unsafe fn press_transition(&mut self) {
+    unsafe fn press_bar(&mut self, button_id: Option<usize>) {
         unsafe {
-            if self.transition.is_none() && !self.collapsed {
-                return;
-            }
             let mut point = POINT::default();
-            let mut rect = RECT::default();
             let _ = GetCursorPos(&mut point);
-            let _ = GetWindowRect(self.bar, &mut rect);
-            let full = self.expanded_rect;
-            let scale = ((rect.right - rect.left) as f32 / (full.right - full.left) as f32)
-                .min((rect.bottom - rect.top) as f32 / (full.bottom - full.top) as f32);
-            let offset =
-                ((rect.right - rect.left) as f32 - (full.right - full.left) as f32 * scale) / 2.;
-            let x = ((point.x - rect.left) as f32 - offset) / scale / (self.dpi / 96.);
-            let id = self
-                .buttons
-                .iter()
-                .find(|b| b.shown && x >= b.left && x < b.left + b.width)
-                .map(|b| b.id);
+            let click_target = button_id
+                .and_then(|id| self.buttons.iter().find(|button| button.id == id))
+                .map(|button| button.hwnd)
+                .unwrap_or(self.bar);
+            let mut click_bounds = RECT::default();
+            let _ = GetWindowRect(click_target, &mut click_bounds);
+            let id = if let Some(id) = button_id {
+                id
+            } else if self.transition.is_some() || self.collapsed {
+                let mut rect = RECT::default();
+                let _ = GetWindowRect(self.bar, &mut rect);
+                let full = self.expanded_rect;
+                let scale = ((rect.right - rect.left) as f32 / (full.right - full.left) as f32)
+                    .min((rect.bottom - rect.top) as f32 / (full.bottom - full.top) as f32);
+                let offset = ((rect.right - rect.left) as f32
+                    - (full.right - full.left) as f32 * scale)
+                    / 2.;
+                let x = ((point.x - rect.left) as f32 - offset) / scale / (self.dpi / 96.);
+                self.buttons
+                    .iter()
+                    .find(|b| b.shown && x >= b.left && x < b.left + b.width)
+                    .map(|b| b.id)
+                    .unwrap_or(DRAG)
+            } else {
+                DRAG
+            };
             self.finish_reveal();
-            if let Some(id) = id {
-                self.motion_press = Some((id, point));
-                SetCapture(self.bar);
+            self.motion_press = Some(BarPress {
+                id,
+                origin: point,
+                click_bounds,
+            });
+            if let Some(button) = self.buttons.iter().find(|button| button.id == id) {
+                SendMessageW(button.hwnd, BM_SETSTATE, Some(WPARAM(1)), None);
+            }
+            SetCapture(self.bar);
+        }
+    }
+
+    unsafe fn cancel_bar_press(&mut self) {
+        unsafe {
+            if let Some(BarPress { id, .. }) = self.motion_press.take()
+                && let Some(button) = self.buttons.iter().find(|button| button.id == id)
+            {
+                SendMessageW(button.hwnd, BM_SETSTATE, Some(WPARAM(0)), None);
+            }
+            if GetCapture() == self.bar {
+                let _ = ReleaseCapture();
             }
         }
     }
 
-    unsafe fn release_transition_press(&mut self) {
+    unsafe fn release_bar_press(&mut self) {
         unsafe {
-            if let Some((id, origin)) = self.motion_press.take() {
-                let _ = ReleaseCapture();
+            if let Some(BarPress {
+                id,
+                origin,
+                click_bounds,
+            }) = self.motion_press
+            {
+                self.cancel_bar_press();
                 let mut point = POINT::default();
                 let _ = GetCursorPos(&mut point);
                 if (point.x - origin.x).abs() <= GetSystemMetrics(SM_CXDRAG)
                     && (point.y - origin.y).abs() <= GetSystemMetrics(SM_CYDRAG)
+                    && point.x >= click_bounds.left
+                    && point.x < click_bounds.right
+                    && point.y >= click_bounds.top
+                    && point.y < click_bounds.bottom
                 {
                     self.command(id);
                 }
             }
+            self.pointer_changed();
         }
     }
 
@@ -1602,11 +1624,13 @@ unsafe extern "system" fn window_proc(
                 | DEFERRED
                 | POINTER_CHANGED
                 | FINISH_REVEAL
+                | PRESS_BAR_BUTTON
                 | WM_MOUSEMOVE
                 | WM_MOUSELEAVE
                 | WM_LBUTTONDOWN
                 | WM_LBUTTONUP
                 | WM_CAPTURECHANGED
+                | WM_CANCELMODE
                 | WM_KEYDOWN
                 | WM_PAINT
                 | WM_ERASEBKGND
@@ -1703,14 +1727,13 @@ unsafe extern "system" fn window_proc(
                 if hwnd == runtime.bar {
                     track_mouse_leave(hwnd);
                     runtime.pointer_changed();
-                    if let Some((DRAG, origin)) = runtime.motion_press {
+                    if let Some(BarPress { origin, .. }) = runtime.motion_press {
                         let mut point = POINT::default();
                         let _ = GetCursorPos(&mut point);
                         if (point.x - origin.x).abs() > GetSystemMetrics(SM_CXDRAG)
                             || (point.y - origin.y).abs() > GetSystemMetrics(SM_CYDRAG)
                         {
-                            runtime.motion_press = None;
-                            let _ = ReleaseCapture();
+                            runtime.cancel_bar_press();
                             let position =
                                 ((point.y as u32 & 0xffff) << 16) | (point.x as u32 & 0xffff);
                             let _ = PostMessageW(
@@ -1725,15 +1748,25 @@ unsafe extern "system" fn window_proc(
                 DefWindowProcW(hwnd, message, wparam, lparam)
             }
             WM_LBUTTONDOWN if hwnd == runtime.bar => {
-                runtime.press_transition();
+                runtime.press_bar(None);
+                LRESULT(0)
+            }
+            PRESS_BAR_BUTTON if hwnd == runtime.bar => {
+                if runtime
+                    .buttons
+                    .iter()
+                    .any(|button| button.id == wparam.0 && button.shown)
+                {
+                    runtime.press_bar(Some(wparam.0));
+                }
                 LRESULT(0)
             }
             WM_LBUTTONUP if hwnd == runtime.bar => {
-                runtime.release_transition_press();
+                runtime.release_bar_press();
                 LRESULT(0)
             }
-            WM_CAPTURECHANGED if hwnd == runtime.bar => {
-                runtime.motion_press = None;
+            WM_CAPTURECHANGED | WM_CANCELMODE if hwnd == runtime.bar => {
+                runtime.cancel_bar_press();
                 runtime.pointer_changed();
                 LRESULT(0)
             }
@@ -1925,9 +1958,10 @@ unsafe extern "system" fn button_proc(
     id: usize,
 ) -> LRESULT {
     unsafe {
-        if message == WM_LBUTTONDOWN
-            && let Ok(parent) = GetParent(hwnd)
-        {
+        // Owner-drawn buttons receive DBLCLK instead of the second DOWN.
+        // It starts a fresh press, including after Esc cancels the first one.
+        let starts_press = matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK);
+        if starts_press && let Ok(parent) = GetParent(hwnd) {
             // Complete the visual transition before a control starts capture
             // or Windows records the rectangle for its modal move loop.
             SendMessageW(parent, FINISH_REVEAL, None, None);
@@ -1943,31 +1977,12 @@ unsafe extern "system" fn button_proc(
                 let _ = PostMessageW(Some(parent), POINTER_CHANGED, WPARAM(0), LPARAM(0));
             }
         }
-        if id == DRAG && message == WM_LBUTTONDOWN {
+        if starts_press {
             let _ = SetFocus(Some(hwnd));
-            let mut point = POINT::default();
-            let _ = GetCursorPos(&mut point);
-            // A click or small hand jitter is not a move gesture. DragDetect
-            // uses the system threshold and consumes the matching release.
-            let dragging = DragDetect(hwnd, point).as_bool();
             if let Ok(parent) = GetParent(hwnd) {
-                // DragDetect consumes a short click's release; the toolbar
-                // still needs a final pointer check after capture is released.
-                let _ = PostMessageW(Some(parent), POINTER_CHANGED, WPARAM(0), LPARAM(0));
-            }
-            if !dragging {
-                return LRESULT(0);
-            }
-            let _ = ReleaseCapture();
-            if let Ok(parent) = GetParent(hwnd) {
-                let _ = GetCursorPos(&mut point);
-                let position = ((point.y as u32 & 0xffff) << 16) | (point.x as u32 & 0xffff);
-                SendMessageW(
-                    parent,
-                    WM_NCLBUTTONDOWN,
-                    Some(WPARAM(HTCAPTION as usize)),
-                    Some(LPARAM(position as isize)),
-                );
+                // All bar controls share the parent's capture and system drag
+                // threshold. Only a short release dispatches the button action.
+                SendMessageW(parent, PRESS_BAR_BUTTON, Some(WPARAM(id)), None);
             }
             return LRESULT(0);
         }

@@ -18,5 +18,10 @@ export default defineConfig({
       },
     },
   },
-  server: { host: "127.0.0.1", port: 4318, strictPort: true },
+  server: {
+    host: "127.0.0.1", port: 4318, strictPort: true,
+    // Local toolchains and build output can contain hundreds of thousands of
+    // files. Watching them stalls both the dev server and component checks.
+    watch: { ignored: ["**/.bootstrap/**", "**/.local/**", "**/target/**", "**/release/**", "**/reports/**"] },
+  },
 });
