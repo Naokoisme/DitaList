@@ -38,6 +38,7 @@ pub enum DesktopAction {
 struct State {
     snapshot: Option<CoreSnapshot>,
     quick_open: bool,
+    quick_dragging: bool,
     main_ready: bool,
     main_opening: Option<MainOpening>,
     after_quick: Option<AfterQuick>,
@@ -95,6 +96,7 @@ impl Desktop {
                 state: Mutex::new(State {
                     snapshot: None,
                     quick_open: false,
+                    quick_dragging: false,
                     main_ready: false,
                     main_opening: None,
                     after_quick: None,
@@ -292,19 +294,18 @@ impl Desktop {
             ),
             "quickResize" => self.resize_quick(payload),
             "quickDrag" => {
-                // Draft handoff may outlast a short gesture. A released pointer
+                // Saving the draft may outlast a short gesture. A released pointer
                 // must leave the current input and its draft in place.
                 if !native::primary_button_down() {
                     return Ok(());
                 }
                 let window = self.window("quick")?;
-                let position = window.outer_position().map_err(|e| e.to_string())?;
-                self.close_quick()?;
-                self.inner.native.send(native::NativeCommand::BeginDrag {
-                    x: position.x,
-                    y: position.y,
-                });
-                Ok(())
+                self.inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .quick_dragging = true;
+                window.start_dragging().map_err(|e| e.to_string())
             }
             "minimize" => {
                 self.inner
@@ -533,6 +534,22 @@ impl Desktop {
         .build()
         .map_err(|e| e.to_string())?;
         window.set_position(position).map_err(|e| e.to_string())?;
+        let inner = Arc::downgrade(&self.inner);
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::Moved(position) = event
+                && let Some(inner) = inner.upgrade()
+                && inner
+                    .state
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .quick_dragging
+            {
+                inner.native.send(native::NativeCommand::MoveQuick {
+                    x: position.x,
+                    y: position.y,
+                });
+            }
+        });
         Self::attach_close_handoff(&window, "quick");
         self.creation_timeout("quick");
         Ok(())
@@ -605,6 +622,7 @@ impl Desktop {
         let next = {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             state.quick_open = false;
+            state.quick_dragging = false;
             state.quick_generation += 1;
             state.after_quick.take()
         };

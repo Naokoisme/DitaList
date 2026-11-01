@@ -97,7 +97,7 @@ pub enum NativeCommand {
     InputActive(bool),
     HoldForMain(bool),
     ShowReminders,
-    BeginDrag { x: i32, y: i32 },
+    MoveQuick { x: i32, y: i32 },
     Shutdown,
 }
 
@@ -648,32 +648,24 @@ impl Runtime {
                         }
                     }
                     NativeCommand::ShowReminders => self.show_reminders(false),
-                    NativeCommand::BeginDrag { x, y } => {
-                        if GetAsyncKeyState(VK_LBUTTON.0 as i32) < 0 {
+                    NativeCommand::MoveQuick { x, y } => {
+                        if self.input_active {
                             self.stop_transition();
                             self.dock = Dock::default();
                             self.collapsed = false;
                             self.cancel_edge_hide();
-                            self.layout();
                             let _ = SetWindowPos(
                                 self.bar,
-                                Some(HWND_TOPMOST),
+                                None,
                                 x,
                                 y,
                                 0,
                                 0,
-                                SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER,
                             );
-                            // WM_MOVE can reenter while drain holds the Runtime
-                            // borrow, so preserve this move before refresh lays out.
+                            // Keep the hidden native bar at the input position so
+                            // collapse restores the compact bar at the drop point.
                             self.update_anchor();
-                            // Re-establish capture after the input window is
-                            // destroyed, then use the ordinary bar gesture path.
-                            // Posting a move immediately during the handoff can
-                            // leave the bar visible without entering the move loop.
-                            let _ = SetForegroundWindow(self.bar);
-                            self.press_bar(None);
-                            self.refresh(true);
                         }
                     }
                     NativeCommand::Shutdown => {
