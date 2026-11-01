@@ -15,12 +15,12 @@ before(async () => {
   await server.listen();
   url = server.resolvedUrls!.local[0];
   browser = await chromium.launch({headless: true, executablePath: process.env.DITALIST_CHROME || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"});
-  await mkdir("reports/floating-feedback-20261030", {recursive: true});
+  await mkdir("reports/quick-input-20261101", {recursive: true});
 });
 after(async () => { await browser?.close(); await server?.close(); });
 
 for (const [theme, width] of [["light", 440], ["dark", 320]] as const) {
-  test(`quick grip separates click, jitter, and drag; ${theme}, ${width}px`, async () => {
+  test(`quick non-text gestures separate navigation, jitter, and drag; ${theme}, ${width}px`, async () => {
     const page = await browser.newPage({viewport: {width, height: 160}});
     const data = createEmptyData(); data.settings.theme = theme;
     await page.addInitScript((data) => {
@@ -47,29 +47,42 @@ for (const [theme, width] of [["light", 440], ["dark", 320]] as const) {
       const input = page.getByRole("textbox", {name: "快速添加任务"});
       await input.waitFor();
       await page.waitForFunction(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "ready"));
-      const grip = page.getByRole("button", {name: "拖动悬浮栏", exact: true});
-      await grip.click();
+      const today = page.getByRole("button", {name: "今天 0", exact: true});
       assert.equal(await input.inputValue(), "保留草稿");
       assert.equal(await input.evaluate((el) => el === document.activeElement), true);
-      await grip.focus(); await grip.press("Enter"); await grip.press("Space");
-      assert.equal(await page.evaluate(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "quickDrag" || a.action === "closeQuick")), false);
-      assert.equal(await page.evaluate(() => (window as any).__floatingFixture.commands.length), 0);
-      const bounds = (await grip.boundingBox())!;
+      const bounds = (await today.boundingBox())!;
       await page.mouse.move(bounds.x + 20, bounds.y + 20); await page.mouse.down();
       await page.mouse.move(bounds.x + 22, bounds.y + 21);
       assert.equal(await page.evaluate(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "quickDrag")), false);
+      assert.equal(await input.evaluate((el) => el === document.activeElement), true);
       await page.mouse.move(bounds.x + 26, bounds.y + 20);
       await page.waitForFunction(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "quickDrag"));
       await page.mouse.move(bounds.x + 36, bounds.y + 20); await page.mouse.up();
       assert.equal(await page.evaluate(() => (window as any).__floatingFixture.actions.filter((a: any) => a.action === "quickDrag").length), 1);
+      assert.equal(await page.evaluate(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "closeQuick" || a.action === "openMain")), false);
       assert.equal(await page.evaluate(() => (window as any).__floatingFixture.draft.text), "保留草稿");
-      await page.screenshot({path: `reports/floating-feedback-20261030/web-quick-${theme}.png`});
+      assert.equal(await input.evaluate((el) => el === document.activeElement), true);
+      await page.screenshot({path: `reports/quick-input-20261101/web-quick-gestures-${theme}.png`});
       await page.evaluate(() => { const f = (window as any).__floatingFixture; f.actions = []; f.draftFailure = true; });
       await page.mouse.move(bounds.x + 20, bounds.y + 20); await page.mouse.down();
       await page.mouse.move(bounds.x + 30, bounds.y + 20); await page.mouse.up();
       await page.getByRole("status").filter({hasText: "草稿保存失败"}).waitFor();
-      assert.equal(await page.evaluate(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "quickDrag")), false);
+      assert.equal(await page.evaluate(() => (window as any).__floatingFixture.actions.some((a: any) => ["quickDrag", "closeQuick", "openMain"].includes(a.action))), false);
       assert.equal(await input.inputValue(), "保留草稿");
+      assert.equal(await page.evaluate(() => (window as any).__floatingFixture.commands.length), 0);
+      for (const activation of ["click", "Enter", "Space"]) {
+        await page.reload();
+        await page.waitForFunction(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "ready"));
+        if (activation === "click") await today.click();
+        else { await today.focus(); await today.press(activation); }
+        await page.waitForFunction(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "openMain"));
+        assert.deepEqual(await page.evaluate(() => (window as any).__floatingFixture.actions.filter((a: any) => a.action === "closeQuick" || a.action === "openMain")), [
+          {action: "closeQuick", payload: undefined}, {action: "openMain", payload: {view: "today"}},
+        ]);
+        assert.equal(await page.evaluate(() => (window as any).__floatingFixture.actions.some((a: any) => a.action === "quickDrag")), false);
+        assert.equal(await page.evaluate(() => (window as any).__floatingFixture.draft.text), "保留草稿");
+        assert.equal(await page.evaluate(() => (window as any).__floatingFixture.commands.length), 0);
+      }
     } finally { await page.close(); }
   });
 }

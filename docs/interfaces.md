@@ -37,7 +37,9 @@
 
 `desktop::Desktop` 用 `start(app: tauri::AppHandle, actions: std::sync::mpsc::Sender<DesktopAction>) -> Result<Self,String>` 初始化，提供 `update(&self, snapshot: CoreSnapshot)`, `action(&self, action:&str, payload:serde_json::Value)->Result<(),String>`, `shutdown(&self)`。可用 Arc 包装管理。DesktopAction 枚举由桌面模块定义并向 root 通报，至少包含业务 Command(Operation)、Navigate(view)、Quit、ReminderPresented(ids)。提醒面板显示成功后由核心 Reminder action="notified" 记录。原生线程不直接操作核心存储。
 
-窗口无预建 WebView。原生栏 default40x180 DIP，输入420至560 DIP；主窗口按原风格。核心快照推进原生计数，安静/输入/用户隐藏按草案分流。Tauri 最后窗口释放不退出；显式退出才结束后台。
+窗口无预建 WebView。原生栏默认 40×140 DIP，输入基础宽度 420 DIP、最大 560 DIP；显示额外数量入口时初始输入宽度相应增加，最大值保持 560 DIP。单行输入总高 40 DIP；主窗口按原风格。核心快照推进原生计数，安静/输入/用户隐藏按草案分流。Tauri 最后窗口释放不退出；显式退出才结束后台。
+
+`quickResize` 上报整个输入表面的逻辑宽高，无外围留白补偿。宿主根据完整原生栏锚点定位，优先保持左边缘，右侧不足时保持右边缘，并限制在当前工作区。`quickDrag` 先交接草稿，在鼠标仍按下时从输入窗口原点恢复原生栏并交接拖动；输入文本区保留编辑与选择。
 
 贴边后原生栏收为 4 DIP 白色细线，移入展开、移出 500ms 后收起；保留圆角和 180ms 原生过渡，过渡结束或取消即停止计时。完整矩形独立于细线及过渡矩形，供数量／DPI 变化与快速输入定位使用；提醒面板、输入和拖动期间暂停收起。展开／细线／自由悬浮切换通过内部 `BarPresentation` 消息写入 `runtime.jsonl` 的 `native_bar` 事件，仅记录完成后的状态和窗口边界，不新增业务接口。
 

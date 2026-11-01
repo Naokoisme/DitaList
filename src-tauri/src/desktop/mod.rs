@@ -298,13 +298,11 @@ impl Desktop {
                     return Ok(());
                 }
                 let window = self.window("quick")?;
-                let scale = window.scale_factor().map_err(|e| e.to_string())?;
                 let position = window.outer_position().map_err(|e| e.to_string())?;
                 self.close_quick()?;
                 self.inner.native.send(native::NativeCommand::BeginDrag {
-                    // The Web bar has a 10-DIP transparent shadow margin.
-                    x: position.x + (10. * scale).round() as i32,
-                    y: position.y + (10. * scale).round() as i32,
+                    x: position.x,
+                    y: position.y,
                 });
                 Ok(())
             }
@@ -508,11 +506,7 @@ impl Desktop {
         let anchor = self.inner.native.anchor();
         let scale = anchor.scale.max(1.0);
         let width = (420.0_f64 * scale).min(anchor.work_width);
-        let x = (anchor.right - width).max(anchor.work_x);
-        let y = anchor.top.clamp(
-            anchor.work_y,
-            (anchor.work_bottom - 40.0 * scale).max(anchor.work_y),
-        );
+        let position = Self::quick_position(anchor, width, 40. * scale);
         {
             let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
             state.quick_generation += 1;
@@ -527,6 +521,9 @@ impl Desktop {
         .min_inner_size(240., 40.)
         .max_inner_size(560., 480.)
         .decorations(false)
+        .transparent(true)
+        .no_redirection_bitmap(true)
+        .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
@@ -535,9 +532,7 @@ impl Desktop {
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
-        window
-            .set_position(tauri::PhysicalPosition::new(x as i32, y as i32))
-            .map_err(|e| e.to_string())?;
+        window.set_position(position).map_err(|e| e.to_string())?;
         Self::attach_close_handoff(&window, "quick");
         self.creation_timeout("quick");
         Ok(())
@@ -748,17 +743,30 @@ impl Desktop {
             .set_size(tauri::LogicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
         window
-            .set_position(tauri::PhysicalPosition::new(
-                (anchor.right - width * scale).clamp(
-                    anchor.work_x,
-                    (anchor.work_x + anchor.work_width - width * scale).max(anchor.work_x),
-                ) as i32,
-                anchor.top.clamp(
-                    anchor.work_y,
-                    (anchor.work_bottom - height * scale).max(anchor.work_y),
-                ) as i32,
-            ))
+            .set_position(Self::quick_position(anchor, width * scale, height * scale))
             .map_err(|e| e.to_string())
+    }
+
+    fn quick_position(
+        anchor: native::Anchor,
+        width: f64,
+        height: f64,
+    ) -> tauri::PhysicalPosition<i32> {
+        let work_right = anchor.work_x + anchor.work_width;
+        // Keep the existing entries in place while + grows into an input.
+        // At the right edge, expand left to keep the whole bar on screen.
+        let x = if anchor.left + width <= work_right {
+            anchor.left
+        } else {
+            anchor.right - width
+        };
+        tauri::PhysicalPosition::new(
+            x.clamp(anchor.work_x, (work_right - width).max(anchor.work_x)) as i32,
+            anchor.top.clamp(
+                anchor.work_y,
+                (anchor.work_bottom - height).max(anchor.work_y),
+            ) as i32,
+        )
     }
 
     fn set_shortcut(&self, value: &str) {

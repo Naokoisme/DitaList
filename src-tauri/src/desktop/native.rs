@@ -56,7 +56,7 @@ const EDGE_HIDE_TIMER: usize = 2;
 const EDGE_ANIMATION_TIMER: usize = 3;
 const BAR_CLASS: PCWSTR = w!("DitaListRust.NativeBar");
 const PANEL_CLASS: PCWSTR = w!("DitaListRust.ReminderPanel");
-const DRAG: usize = 10;
+const NO_ACTION: usize = 0;
 const TODAY: usize = 11;
 const PENDING: usize = 12;
 const REMINDERS: usize = 13;
@@ -68,6 +68,7 @@ const DISMISS: usize = 24;
 
 #[derive(Clone, Copy)]
 pub struct Anchor {
+    pub left: f64,
     pub right: f64,
     pub top: f64,
     pub scale: f64,
@@ -79,6 +80,7 @@ pub struct Anchor {
 impl Default for Anchor {
     fn default() -> Self {
         Self {
+            left: 860.,
             right: 1000.,
             top: 700.,
             scale: 1.,
@@ -441,7 +443,7 @@ impl Runtime {
                 WS_POPUP | WS_CLIPCHILDREN,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                180,
+                140,
                 40,
                 None,
                 None,
@@ -476,7 +478,6 @@ impl Runtime {
             )
             .map_err(|e| e.to_string())?;
             for (id, label, width) in [
-                (DRAG, "⋮⋮", 40.),
                 (TODAY, "今天 0", 100.),
                 (PENDING, "待确认 0", 104.),
                 (REMINDERS, "提醒 0", 80.),
@@ -549,9 +550,9 @@ impl Runtime {
             let _ = SetWindowPos(
                 this.bar,
                 Some(HWND_TOPMOST),
-                work.right - (204. * scale) as i32,
+                work.right - (164. * scale) as i32,
                 work.bottom - (76. * scale) as i32,
-                (180. * scale) as i32,
+                (140. * scale) as i32,
                 (40. * scale) as i32,
                 SWP_NOACTIVATE,
             );
@@ -666,19 +667,12 @@ impl Runtime {
                             // WM_MOVE can reenter while drain holds the Runtime
                             // borrow, so preserve this move before refresh lays out.
                             self.update_anchor();
-                            let _ = ReleaseCapture();
-                            let mut point = POINT::default();
-                            let _ = GetCursorPos(&mut point);
-                            let position =
-                                ((point.y as u32 & 0xffff) << 16) | (point.x as u32 & 0xffff);
-                            // Release the Runtime RefCell borrow before User32
-                            // enters its modal move loop and reenters window_proc.
-                            let _ = PostMessageW(
-                                Some(self.bar),
-                                WM_NCLBUTTONDOWN,
-                                WPARAM(HTCAPTION as usize),
-                                LPARAM(position as isize),
-                            );
+                            // Re-establish capture after the input window is
+                            // destroyed, then use the ordinary bar gesture path.
+                            // Posting a move immediately during the handoff can
+                            // leave the bar visible without entering the move loop.
+                            let _ = SetForegroundWindow(self.bar);
+                            self.press_bar(None);
                             self.refresh(true);
                         }
                     }
@@ -762,7 +756,6 @@ impl Runtime {
                     PENDING => format!("Agent 待确认 {pending} 项"),
                     REMINDERS => format!("到时提醒 {reminders} 项"),
                     ADD => "快速添加任务".into(),
-                    DRAG => "拖到屏幕边缘收成细线，移入展开；拖离边缘恢复悬浮".into(),
                     _ => button.label.clone(),
                 };
                 let label = wide(&accessible);
@@ -903,6 +896,7 @@ impl Runtime {
             let rect = self.expanded_rect;
             let work = work_area(self.bar);
             *self.anchor.lock().unwrap_or_else(|e| e.into_inner()) = Anchor {
+                left: rect.left as f64,
                 right: rect.right as f64,
                 top: rect.top as f64,
                 scale: (self.dpi / 96.) as f64,
@@ -1078,9 +1072,9 @@ impl Runtime {
                     .iter()
                     .find(|b| b.shown && x >= b.left && x < b.left + b.width)
                     .map(|b| b.id)
-                    .unwrap_or(DRAG)
+                    .unwrap_or(NO_ACTION)
             } else {
-                DRAG
+                NO_ACTION
             };
             self.finish_reveal();
             self.motion_press = Some(BarPress {
@@ -2323,7 +2317,7 @@ mod tests {
             None
         );
         assert_eq!(
-            clicked_button(WPARAM(DRAG), control, [&button].into_iter()),
+            clicked_button(WPARAM(NO_ACTION), control, [&button].into_iter()),
             None
         );
     }

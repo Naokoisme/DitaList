@@ -17,6 +17,7 @@ before(async () => {
   url = server.resolvedUrls!.local[0];
   browser = await chromium.launch({headless: true, executablePath: process.env.DITALIST_CHROME || "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"});
   await mkdir("tests/web-evidence", {recursive: true});
+  await mkdir("reports", {recursive: true});
 });
 after(async () => { await browser?.close(); await server?.close(); });
 
@@ -574,6 +575,98 @@ test("a failed detail write survives unrelated success and blocks window release
     assert.equal(updates[0].requestId, updates[1].requestId);
     await page.evaluate(() => (window as any).__fixture.emit("desktop://prepare-close", {window: "main"}));
     await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === "closeMain"));
+  } finally { await page.close(); }
+});
+
+for (const theme of ["light", "dark"] as const) {
+  test(`floating input continues the native bar with one measured surface (${theme})`, async () => {
+    const state = fixture(); state.data.settings.theme = theme;
+    state.todayCount = 120; state.pendingCount = 3; state.reminderCount = 2;
+    const page = await open("floating.html", state);
+    try {
+      const shell = page.locator(".floating-shell");
+      await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === "quickResize" && item.payload.width === 560 && item.payload.height === 40));
+      assert.deepEqual(await shell.boundingBox(), {x: 0, y: 0, width: 560, height: 40});
+      assert.equal(await page.getByRole("button", {name: "拖动悬浮栏"}).count(), 0);
+      assert.deepEqual(await page.locator(".floating-form button").allTextContents(), ["今天 99+", "待确认 3", "提醒 2", "", ""]);
+      for (const [name, width] of [["今天 99+", 100], ["待确认 3", 104], ["提醒 2", 80]] as const) {
+        assert.equal((await page.getByRole("button", {name, exact: true}).boundingBox())?.width, width);
+      }
+      assert.deepEqual(await shell.evaluate((node) => ({shadow: getComputedStyle(node).boxShadow, corners: getComputedStyle(node).borderRadius})), {shadow: "none", corners: "8px"});
+      await page.screenshot({path: `reports/quick-input-${theme}.png`, clip: {x: 0, y: 0, width: 560, height: 40}});
+      const input = page.getByRole("textbox", {name: "快速添加任务"});
+      await input.fill(Array(12).fill("这是一段需要换行并保留全文的长任务内容").join("\n"));
+      await page.waitForFunction(() => (window as any).__fixture.actions.at(-1)?.action === "quickResize" && (window as any).__fixture.actions.at(-1)?.payload.height === 160);
+      assert.equal((await input.boundingBox())?.height, 144);
+      assert.deepEqual(await shell.boundingBox(), {x: 0, y: 0, width: 560, height: 160});
+      await page.evaluate(() => {
+        (window as any).__fixture.draftFailures = 1;
+        (window as any).__fixture.emit("desktop://prepare-close", {window: "quick"});
+      });
+      await page.getByRole("status").waitFor();
+      const bounds = await shell.boundingBox();
+      const lastResize = await page.evaluate(() => (window as any).__fixture.actions.filter((item: any) => item.action === "quickResize").at(-1)?.payload);
+      assert.deepEqual(lastResize, {width: bounds!.width, height: bounds!.height});
+      assert.ok(bounds!.height > 160);
+      const hint = await page.getByRole("status").boundingBox();
+      assert.ok(hint!.y + hint!.height <= bounds!.height);
+      await page.screenshot({path: `reports/quick-input-multiline-error-${theme}.png`, clip: {x: 0, y: 0, width: bounds!.width, height: bounds!.height}});
+    } finally { await page.close(); }
+  });
+}
+
+test("floating bar omits empty entries and short presses keep their navigation", async () => {
+  const state = fixture(); state.pendingCount = 0;
+  const page = await open("floating.html", state);
+  try {
+    assert.equal(await page.getByRole("button", {name: /待确认|提醒/}).count(), 0);
+    await page.getByRole("button", {name: "今天 1", exact: true}).click();
+    await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === "openMain"));
+    assert.deepEqual(await page.evaluate(() => (window as any).__fixture.actions.find((item: any) => item.action === "openMain").payload), {view: "today"});
+  } finally { await page.close(); }
+  const entries = fixture(); entries.reminderCount = 1;
+  const entryPage = await open("floating.html", entries);
+  try {
+    await entryPage.getByRole("textbox", {name: "快速添加任务"}).fill("入口切换前的草稿");
+    await entryPage.getByRole("button", {name: "提醒 1", exact: true}).click();
+    assert.equal(await entryPage.evaluate(() => (window as any).__fixture.actions.some((item: any) => item.action === "showReminders")), true);
+    await entryPage.getByRole("button", {name: "待确认 2", exact: true}).click();
+    await entryPage.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === "openMain"));
+    assert.deepEqual(await entryPage.evaluate(() => (window as any).__fixture.actions.find((item: any) => item.action === "openMain").payload), {view: "agent-review"});
+    assert.equal(await entryPage.evaluate(() => (window as any).__fixture.draft.text), "入口切换前的草稿");
+  } finally { await entryPage.close(); }
+});
+
+test("floating non-text areas drag across the threshold while text remains selectable", async () => {
+  const state = fixture(); state.reminderCount = 1;
+  const page = await open("floating.html", state);
+  try {
+    const input = page.getByRole("textbox", {name: "快速添加任务"});
+    await input.fill("拖动后仍保留草稿，文本可以选择");
+    const move = async (button: ReturnType<Page["getByRole"]>, dx: number) => {
+      const box = (await button.boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + dx, box.y + box.height / 2);
+      return () => page.mouse.up();
+    };
+    for (const name of ["今天 1", "待确认 2", "提醒 1", "添加任务", "收起输入"]) {
+      const previous = await page.evaluate(() => (window as any).__fixture.actions.filter((item: any) => item.action === "quickDrag").length);
+      const release = await move(page.getByRole("button", {name, exact: true}), 8);
+      await page.waitForFunction((count) => (window as any).__fixture.actions.filter((item: any) => item.action === "quickDrag").length === count + 1, previous);
+      await release();
+    }
+    assert.equal(await page.evaluate(() => (window as any).__fixture.actions.some((item: any) => ["closeQuick", "openMain", "showReminders"].includes(item.action))), false);
+    assert.equal(await page.evaluate(() => (window as any).__fixture.commands.length), 0);
+    assert.equal(await page.evaluate(() => (window as any).__fixture.draft.text), "拖动后仍保留草稿，文本可以选择");
+    const inputBox = (await input.boundingBox())!;
+    await page.mouse.move(inputBox.x + 10, inputBox.y + 12);
+    await page.mouse.down(); await page.mouse.move(inputBox.x + 100, inputBox.y + 12, {steps: 6}); await page.mouse.up();
+    assert.ok(await input.evaluate((node) => node.selectionEnd > node.selectionStart));
+    assert.equal(await page.evaluate(() => (window as any).__fixture.actions.filter((item: any) => item.action === "quickDrag").length), 5);
+    const release = await move(page.getByRole("button", {name: "今天 1", exact: true}), 2);
+    await release();
+    await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === "openMain"));
   } finally { await page.close(); }
 });
 

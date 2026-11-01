@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowUp, GripVertical, X } from "lucide-react";
+import { ArrowUp, X } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import type { QuickDraft } from "./generated/contracts";
 import { desktopAction, errorMessage, executeOperation, getDraft, getRequest, setDraft, watchCore, type Snapshot } from "./core/client";
@@ -13,6 +13,7 @@ export default function FloatingApp() {
   const [width, setWidth] = useState(420);
   const [height, setHeight] = useState(24);
   const [exitPending, setExitPending] = useState(false);
+  const shell = useRef<HTMLElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const measure = useRef<HTMLSpanElement>(null);
   const current = useRef<QuickDraft>({text: "", requestId: null});
@@ -23,7 +24,12 @@ export default function FloatingApp() {
   const submission = useRef<Promise<unknown> | null>(null);
   const exitRequested = useRef(false);
   const exitSequence = useRef(0);
-  const gripStart = useRef<{pointerId: number; x: number; y: number} | null>(null);
+  const dragStart = useRef<{pointerId: number; x: number; y: number; target: HTMLElement} | null>(null);
+  const dragged = useRef(false);
+  const pendingCount = snapshot?.pendingCount || 0;
+  const reminderCount = snapshot?.reminderCount || 0;
+  const navigationWidth = 100 + (pendingCount ? 104 : 0) + (reminderCount ? 80 : 0);
+  const number = (value: number) => value > 99 ? "99+" : value;
 
   function saveDraft(draft = current.current) {
     const copy = {...draft};
@@ -112,17 +118,31 @@ export default function FloatingApp() {
     return () => media.removeEventListener("change", sync);
   }, [snapshot?.data.settings.theme, snapshot?.data.settings.accent]);
   useLayoutEffect(() => {
-    if (measure.current) setWidth(Math.min(560, Math.max(420, measure.current.getBoundingClientRect().width + 180)));
-  }, [text]);
+    if (measure.current) setWidth(Math.min(560, Math.max(navigationWidth + 320, measure.current.getBoundingClientRect().width + navigationWidth + 90)));
+  }, [text, navigationWidth]);
   useLayoutEffect(() => {
     if (!input.current) return;
     input.current.style.height = "0px";
     const next = Math.min(144, Math.max(24, input.current.scrollHeight));
     input.current.style.height = `${next}px`; setHeight(next);
-  }, [text, width]);
+  }, [text, width, navigationWidth]);
   useLayoutEffect(() => {
-    void desktopAction("quickResize", {width: width + 20, height: Math.max(40, height + 16) + (hint ? 40 : 0) + 20}).catch((error) => setHint(errorMessage(error)));
-  }, [width, height, hint]);
+    if (!shell.current) return;
+    let previous = "";
+    const resize = () => {
+      if (!shell.current) return;
+      const bounds = shell.current.getBoundingClientRect();
+      const size = {width: Math.ceil(bounds.width), height: Math.ceil(bounds.height)};
+      const key = `${size.width}:${size.height}`;
+      if (key === previous) return;
+      previous = key;
+      void desktopAction("quickResize", size).catch((error) => setHint(errorMessage(error)));
+    };
+    const observer = new ResizeObserver(resize);
+    observer.observe(shell.current);
+    resize();
+    return () => observer.disconnect();
+  }, []);
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
@@ -152,28 +172,35 @@ export default function FloatingApp() {
       setHint(errorMessage(error));
     } finally { submission.current = null; setSending(false); }
   }
-  return <main className="floating-shell" style={{width}} onKeyDown={(event) => {
+  return <main ref={shell} className="floating-shell" style={{width}} onPointerDown={(event) => {
+    dragged.current = false;
+    if (event.button !== 0 || (event.target as HTMLElement).closest("textarea, .floating-hint") || composing.current || submission.current || exitRequested.current) return;
+    event.preventDefault();
+    const target = (event.target as HTMLElement).closest("button") || event.currentTarget;
+    dragStart.current = {pointerId: event.pointerId, x: event.clientX, y: event.clientY, target};
+    target.setPointerCapture(event.pointerId);
+  }} onPointerMove={(event) => {
+    const start = dragStart.current;
+    if (!start || start.pointerId !== event.pointerId || (Math.abs(event.clientX - start.x) < 4 && Math.abs(event.clientY - start.y) < 4)) return;
+    dragStart.current = null;
+    dragged.current = true;
+    start.target.releasePointerCapture(event.pointerId);
+    void (async () => {
+      try { await saveDraft(); await desktopAction("quickDrag"); } catch (error) { setHint(errorMessage(error)); }
+    })();
+  }} onPointerUp={() => { dragStart.current = null; }} onPointerCancel={() => { dragStart.current = null; }} onLostPointerCapture={() => {
+    dragStart.current = null;
+  }} onClickCapture={(event) => {
+    if (!dragged.current) return;
+    dragged.current = false;
+    event.preventDefault(); event.stopPropagation();
+  }} onKeyDown={(event) => {
     if (event.key === "Escape" && !composing.current && !event.nativeEvent.isComposing) { event.preventDefault(); void collapse(); }
   }}>
     <form className="floating-form" onSubmit={submit}>
-      <button type="button" className="floating-grip" aria-label="拖动悬浮栏" title="拖动悬浮栏" onPointerDown={(event) => {
-        if (event.button !== 0 || composing.current || submission.current || exitRequested.current) return;
-        // Keep a click on the grip from taking the input focus or ending editing.
-        event.preventDefault();
-        gripStart.current = {pointerId: event.pointerId, x: event.clientX, y: event.clientY};
-        event.currentTarget.setPointerCapture(event.pointerId);
-      }} onPointerMove={(event) => {
-        const start = gripStart.current;
-        if (!start || start.pointerId !== event.pointerId || (Math.abs(event.clientX - start.x) < 4 && Math.abs(event.clientY - start.y) < 4)) return;
-        gripStart.current = null;
-        event.currentTarget.releasePointerCapture(event.pointerId);
-        void (async () => {
-          try { await saveDraft(); await desktopAction("quickDrag"); } catch (error) { setHint(errorMessage(error)); }
-        })();
-      }} onPointerUp={() => { gripStart.current = null; }} onPointerCancel={() => { gripStart.current = null; }} onLostPointerCapture={() => {
-        gripStart.current = null;
-      }}><GripVertical size={16}/></button>
-      <button type="button" className="floating-today" title="查看今天待办（含逾期）" onClick={() => void collapse("today")}>今天 <b>{(snapshot?.todayCount || 0) > 99 ? "99+" : snapshot?.todayCount || 0}</b></button>
+      <button type="button" className="floating-today" title="查看今天待办（含逾期）" onClick={() => void collapse("today")}>今天 <b>{number(snapshot?.todayCount || 0)}</b></button>
+      {pendingCount > 0 && <button type="button" className="floating-pending" title="查看 Agent 待确认" onClick={() => void collapse("agent-review")}>待确认 <b>{number(pendingCount)}</b></button>}
+      {reminderCount > 0 && <button type="button" className="floating-reminders" title="查看到时提醒" onClick={() => void desktopAction("showReminders").catch((error) => setHint(errorMessage(error)))}>提醒 <b>{number(reminderCount)}</b></button>}
       <textarea ref={input} value={text} rows={1} maxLength={10000} style={{height}} aria-label="快速添加任务" placeholder="记下一件事…" readOnly={sending || unresolved}
         onCompositionStart={() => { composing.current = true; }}
         onCompositionEnd={() => {

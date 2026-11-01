@@ -247,22 +247,18 @@ mod tests {
     use super::*;
 
     fn buttons() -> Vec<Button> {
-        [
-            (DRAG, "⋮⋮", 40., 0.),
-            (TODAY, "今天 3", 100., 40.),
-            (ADD, "＋", 40., 140.),
-        ]
-        .into_iter()
-        .map(|(id, label, width, left)| Button {
-            hwnd: HWND::default(),
-            id,
-            label: label.into(),
-            width,
-            left,
-            shown: true,
-            tooltip: vec![],
-        })
-        .collect()
+        [(TODAY, "今天 3", 100., 0.), (ADD, "＋", 40., 100.)]
+            .into_iter()
+            .map(|(id, label, width, left)| Button {
+                hwnd: HWND::default(),
+                id,
+                label: label.into(),
+                width,
+                left,
+                shown: true,
+                tooltip: vec![],
+            })
+            .collect()
     }
 
     fn theme(dark: bool) -> Theme {
@@ -281,7 +277,7 @@ mod tests {
             for dpi in [1., 1.5, 2.] {
                 for dark in [false, true] {
                     let surface = Surface::new(
-                        (180. * dpi) as i32,
+                        (140. * dpi) as i32,
                         (40. * dpi) as i32,
                         dpi,
                         &buttons(),
@@ -310,7 +306,7 @@ mod tests {
                         (surface.width * surface.height * 4) as usize,
                     );
                     let center =
-                        ((surface.height / 2 * surface.width + (28. * dpi) as i32) * 4) as usize;
+                        ((surface.height / 2 * surface.width + (10. * dpi) as i32) * 4) as usize;
                     assert_eq!(pixels[center + 3], 255);
                     if dark {
                         assert!(pixels[center] < 70);
@@ -334,7 +330,7 @@ mod tests {
                 WS_POPUP,
                 0,
                 0,
-                180,
+                140,
                 40,
                 None,
                 None,
@@ -342,9 +338,9 @@ mod tests {
                 None,
             )
             .unwrap();
-            let surface = Surface::new(180, 40, 1., &buttons(), theme(false)).unwrap();
+            let surface = Surface::new(140, 40, 1., &buttons(), theme(false)).unwrap();
             for (progress, width, height) in
-                [(0., 4, 24), (0.25, 48, 28), (0.7, 127, 35), (1., 180, 40)]
+                [(0., 4, 24), (0.25, 38, 28), (0.7, 99, 35), (1., 140, 40)]
             {
                 let rect = RECT {
                     left: -width,
@@ -381,25 +377,25 @@ mod tests {
         let full = RECT {
             left: 0,
             top: 0,
-            right: 270,
+            right: 210,
             bottom: 60,
         };
         let work = RECT {
             left: 0,
             top: 0,
-            right: 270,
+            right: 210,
             bottom: 400,
         };
         let dock = Dock::after_drag(full, work, 144.);
         let line = dock.collapsed_rect(full, work, 144.);
         unsafe {
-            let surface = Surface::new(270, 60, 1.5, &buttons(), theme(false)).unwrap();
+            let surface = Surface::new(210, 60, 1.5, &buttons(), theme(false)).unwrap();
             for frame in 0..96 {
                 let now = start + Duration::from_millis(frame * 16);
                 if frame == 46 {
                     spring.retarget(true, now);
                 }
-                let (progress, _) = spring.frame(now, 270.);
+                let (progress, _) = spring.frame(now, 210.);
                 let rect = transition_rect(line, full, progress);
                 let width = rect.right - rect.left;
                 let height = rect.bottom - rect.top;
@@ -408,7 +404,7 @@ mod tests {
                     surface.pixels.cast::<u8>(),
                     (surface.width * surface.height * 4) as usize,
                 );
-                let canvas_width = 310;
+                let canvas_width = 250;
                 let canvas_height = 100;
                 let mut ppm = format!("P6\n{canvas_width} {canvas_height}\n255\n").into_bytes();
                 for y in 0..canvas_height {
