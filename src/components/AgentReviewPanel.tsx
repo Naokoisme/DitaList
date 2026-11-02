@@ -2,13 +2,14 @@ import { useState } from "react";
 import { Bot, Check, Menu, X } from "lucide-react";
 import type { CommandReceipt, Operation } from "../generated/contracts";
 import type { Snapshot } from "../core/client";
+import { displayListIndex, listPath } from "../core/hierarchy";
 import { displayTagIndex, tagPath } from "../core/tags";
 
 const fieldLabels: Record<string, string> = {title: "标题", content: "描述", listId: "清单", startDate: "开始日期", dueDate: "截止日期", time: "开始时间", endTime: "结束时间", priority: "优先级", tags: "标签", pinned: "置顶", repeat: "重复", reminder: "提醒"};
 function display(value: unknown, field: string, snapshot: Snapshot): string {
   if (value == null) return "未设置";
   if (field === "priority") return ["无优先级", "高优先级", "中优先级", "低优先级"][Number(value)] || String(value);
-  if (field === "listId") return snapshot.data.lists.find((list) => list.id === value)?.name || String(value);
+  if (field === "listId") return listPath(displayListIndex(snapshot.data, snapshot.listIndex), String(value));
   if (field === "tags" && Array.isArray(value)) { const index = displayTagIndex(snapshot.data, snapshot.tagIndex); return value.map((id) => tagPath(index, String(id))).join("、") || "无"; }
   if (field === "subtasks" && Array.isArray(value)) return value.map((item) => `${item.completed ? "已完成" : "未完成"}：${item.title}`).join("；") || "无";
   return Array.isArray(value) ? value.join("、") || "无" : typeof value === "boolean" ? value ? "是" : "否" : String(value);

@@ -70,6 +70,7 @@ pub(crate) fn empty_data() -> AppData {
             name: "收集箱".into(),
             color: "#4772FA".into(),
             folder_id: None,
+            parent_list_id: None,
             archived: false,
             sort_order: 0.0,
         }],
@@ -348,64 +349,5 @@ pub(crate) fn move_list(
     id: &str,
     target: &ListMoveTarget,
 ) -> Result<(), CoreError> {
-    let source = data
-        .lists
-        .iter()
-        .find(|list| list.id == id)
-        .ok_or_else(|| CoreError::new("not_found", "清单不存在"))?;
-    if source.id == "inbox" || source.archived {
-        return Err(invalid("收集箱或归档清单不能移动"));
-    }
-    let folder_id = match target {
-        ListMoveTarget::Group { folder_id } => {
-            if let Some(folder) = folder_id
-                && !data.folders.iter().any(|f| f.id == *folder)
-            {
-                return Err(invalid("文件夹不存在"));
-            }
-            folder_id.clone()
-        }
-        ListMoveTarget::List { list_id, position } => {
-            if !["before", "after"].contains(&position.as_str()) {
-                return Err(invalid("清单位置无效"));
-            }
-            let anchor = data
-                .lists
-                .iter()
-                .find(|list| list.id == *list_id)
-                .ok_or_else(|| CoreError::new("not_found", "目标清单不存在"))?;
-            if anchor.id == id || anchor.id == "inbox" || anchor.archived {
-                return Err(invalid("目标清单不能用于排序"));
-            }
-            anchor.folder_id.clone()
-        }
-    };
-    let mut siblings: Vec<_> = data
-        .lists
-        .iter()
-        .filter(|list| {
-            !list.archived && list.id != "inbox" && list.id != id && list.folder_id == folder_id
-        })
-        .collect();
-    siblings.sort_by(|a, b| a.sort_order.total_cmp(&b.sort_order));
-    let mut ordered: Vec<_> = siblings.into_iter().map(|list| list.id.clone()).collect();
-    let index = match target {
-        ListMoveTarget::Group { .. } => ordered.len(),
-        ListMoveTarget::List { list_id, position } => {
-            ordered.iter().position(|v| v == list_id).unwrap() + usize::from(position == "after")
-        }
-    };
-    ordered.insert(index, id.into());
-    let positions: BTreeMap<_, _> = ordered
-        .into_iter()
-        .enumerate()
-        .map(|(index, id)| (id, index as f64))
-        .collect();
-    for list in &mut data.lists {
-        if let Some(order) = positions.get(&list.id) {
-            list.folder_id = folder_id.clone();
-            list.sort_order = *order;
-        }
-    }
-    Ok(())
+    crate::lists::reparent(data, id, target)
 }

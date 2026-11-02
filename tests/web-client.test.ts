@@ -10,7 +10,7 @@ import type { CoreSnapshot, CommandReceipt, Operation } from "../src/generated/c
 const snapshot = (revision: number): CoreSnapshot => ({
   data: {...createEmptyData(), settings: {...createEmptyData().settings, customTags: []}}, revision, entityVersions: {}, approvals: [], reminders: [],
   focus: {mode: "focus", running: false, taskId: null, title: "", startedAt: null, deadline: null, remainingSeconds: 1500, elapsedSeconds: 0, targetSeconds: 1500},
-  preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 0, pendingCount: 0, reminderCount: 0, tagIndex: [],
+  preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 0, pendingCount: 0, reminderCount: 0, tagIndex: [], listIndex: [],
 });
 const receipt = (requestId: string): CommandReceipt => ({requestId, status: "applied", revision: 2, result: {saved: true}, createdAt: "2026-10-30T00:00:00Z"});
 
@@ -113,4 +113,27 @@ for (const code of ['storage', 'closing', 'unknown_ipc']) {
       assert.equal(ids[0], ids[1]);
     } finally { clearMocks(); }
   });
+}
+for (const type of ['tagMove', 'listMove'] as const) {
+  for (const code of ['invalid_input', 'conflict', 'not_found', 'forbidden', 'storage', 'closing', 'unknown_ipc']) {
+    test(`${type} request identity follows the definitive or uncertain ${code} result`, async () => {
+      const ids: string[] = [];
+      mockIPC((command, args: any) => {
+        if (command === 'core_get_request') return null;
+        if (command === 'core_execute') {
+          ids.push(args.command.requestId);
+          if (ids.length === 1) throw {code, message: '移动未完成'};
+          return receipt(args.command.requestId);
+        }
+        throw new Error(command);
+      });
+      try {
+        const operation: Operation = type === 'tagMove' ? {type, id: `${type}-${code}`, target: {kind: 'root'}} : {type, id: `${type}-${code}`, target: {kind: 'group', folderId: null}};
+        await assert.rejects(executeOperation(operation), (error: any) => error.code === code);
+        await executeOperation(operation);
+        if (['storage', 'closing', 'unknown_ipc'].includes(code)) assert.equal(ids[0], ids[1]);
+        else assert.notEqual(ids[0], ids[1]);
+      } finally { clearMocks(); }
+    });
+  }
 }

@@ -505,6 +505,26 @@ pub fn dispatch(core: &CoreService, method: &str, params: Value) -> Result<Value
                         .ok_or_else(|| failure("not_found", "标签不存在"))
                 })
                 .transpose()?;
+            let list_ids = params
+                .get("listId")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    let id = value
+                        .as_str()
+                        .ok_or_else(|| failure("invalid_input", "listId 必须是清单 ID"))?;
+                    snapshot
+                        .list_index
+                        .iter()
+                        .find(|list| list.id == id)
+                        .map(|list| {
+                            list.subtree_ids
+                                .iter()
+                                .cloned()
+                                .collect::<std::collections::HashSet<_>>()
+                        })
+                        .ok_or_else(|| failure("not_found", "清单不存在"))
+                })
+                .transpose()?;
             let tasks: Vec<_> = snapshot
                 .data
                 .tasks
@@ -514,13 +534,16 @@ pub fn dispatch(core: &CoreService, method: &str, params: Value) -> Result<Value
                         && tag_ids
                             .as_ref()
                             .is_none_or(|ids| t.tags.iter().any(|tag| ids.contains(tag)))
+                        && list_ids.as_ref().is_none_or(|ids| ids.contains(&t.list_id))
                         && (query.is_empty()
                             || format!("{} {} {}", t.title, t.content, t.tags.join(" "))
                                 .to_lowercase()
                                 .contains(&query))
                 })
                 .collect();
-            Ok(json!({"tasks":tasks,"lists":snapshot.data.lists,"tagIndex":snapshot.tag_index}))
+            Ok(
+                json!({"tasks":tasks,"lists":snapshot.data.lists,"tagIndex":snapshot.tag_index,"listIndex":snapshot.list_index}),
+            )
         }
         "tasks.get" => {
             let id = string_arg(&params, "id")?;

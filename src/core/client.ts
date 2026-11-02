@@ -14,8 +14,8 @@ export function errorMessage(error: unknown): string {
   return String(error);
 }
 
-export function isRejectedTagUpsert(operation: Operation, error: unknown): boolean {
-  return operation.type === "tagUpsert" && typeof error === "object" && error !== null && "code" in error &&
+export function isRejectedHierarchyOperation(operation: Operation, error: unknown): boolean {
+  return ["tagUpsert", "tagMove", "listMove"].includes(operation.type) && typeof error === "object" && error !== null && "code" in error &&
     ["invalid_input", "conflict", "not_found", "forbidden"].includes(String(error.code));
 }
 
@@ -60,7 +60,7 @@ export async function executeOperation(operation: Operation, requestId?: string)
     uncertain.delete(key);
     return receipt;
   } catch (error) {
-    if (isRejectedTagUpsert(operation, error)) {
+    if (isRejectedHierarchyOperation(operation, error)) {
       if (uncertain.get(key) === id) uncertain.delete(key);
       throw error;
     }

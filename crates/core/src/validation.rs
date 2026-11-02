@@ -269,6 +269,7 @@ pub(crate) fn app(data: &mut AppData) -> Result<(), CoreError> {
     if !list_ids.contains("inbox") {
         return Err(invalid("数据缺少收集箱"));
     }
+    crate::lists::validate(data)?;
     for t in &mut data.tasks {
         task(t)?;
         if !list_ids.contains(t.list_id.as_str()) {

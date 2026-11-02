@@ -63,6 +63,18 @@ MCP 已受理但保存失败的操作保留原参数。关闭时重试，仍为�
 
 MCP `dida_list_list_tasks` 新增可选 `tag` 完整键，包含该标签的全部后代；响应包含 `tagIndex`，便于客户端取得有效路径。`query` 保持文字子串搜索。
 
+## 标签与清单拖放
+
+普通拖动采用三分区：目标中央表示 `inside`（成为下级），上下边缘表示 `before/after`（在目标同级排序）。移入高亮和排序线分别呈现；拖回顶层解除父级，清单也可以拖回分组。取消、无效目标和失败不得提前改写树，长按整理导航与任务拖入仍沿用各自入口。
+
+`TagMove {id,target}` 接受 `{kind:"root"}` 或 `{kind:"tag",tagId,position}`。核心原子修改父级、整个子树键和兄弟顺序；回执返回 `result.id` 及 `result.mapping`，供界面保持当前选中的后代视图。循环、移动后超过三层和键冲突在持久化前拒绝。
+
+`TaskList.parentListId` 是可选父清单 ID，旧库缺省为根。子清单与自身 `folderId` 互斥，分组从根继承，分组容器不占三层清单深度。`ListMove` 的清单目标新增 `position:"inside"`，前后排序和分组落点保持兼容；子级导航排序组使用 `list:<父清单ID>`。清单 ID 与任务的 `listId` 在移动时保持稳定。
+
+`CoreSnapshot.listIndex` 返回 `{id,name,parentId,path,rootId,subtreeIds,folderId}`，子树成员包含自身，`folderId` 为继承后的有效分组。父清单筛选和计数包含全部子清单，选择器使用完整路径。MCP 查询新增可选 `listId`，响应同时提供 `listIndex`。
+
+删除父清单时仅删除当前清单，直接任务依旧转入收集箱，直属子清单提升到原父级或分组；归档当前清单也提升直属子清单，保留下级可见性。编辑、拖动、导入和重新打开使用同一套核心层级校验。
+
 ## 分工
 
 root：合同与生成、根清单/锁、src-tauri 启动与 IPC、MCP、脚本/文档与集成。core：crates/core/src 与测试。desktop：src-tauri/src/desktop。web：src（排除 generated）及 tests/web-*。先依合同实现；需要新增操作或窗口 IPC 先发消息给 root。

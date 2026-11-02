@@ -33,7 +33,7 @@ function fixture(): CoreSnapshot {
     data: data as CoreSnapshot["data"], revision: 1, entityVersions: {existing: 1, pending: 1},
     approvals: [{id: "proposal", taskId: "existing", patch: {title: "整理项目周报", priority: 1}, baseVersion: 1, status: "pending", createdAt: new Date().toISOString()}],
     reminders: [], focus: {mode: "focus", running: true, taskId: "existing", title: "准备周报", startedAt: new Date(Date.now() - 266_000).toISOString(), deadline: new Date(Date.now() + 1_234_000).toISOString(), remainingSeconds: 1234, elapsedSeconds: 266, targetSeconds: 1500},
-    preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 1, pendingCount: 2, reminderCount: 0, tagIndex: [],
+    preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 1, pendingCount: 2, reminderCount: 0, tagIndex: [], listIndex: [],
   };
 }
 
@@ -857,3 +857,190 @@ test('a rejected new tag preserves the earlier storage failure through cancellat
     await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === 'closeMain'));
   } finally { await page.close(); }
 });
+function dragHierarchyFixture(): CoreSnapshot {
+  const state = hierarchyFixture();
+  state.data.settings.customTags.push('生活', '读书');
+  state.tagIndex.push(...['生活', '读书'].map((id) => ({id, name: id, parentId: null, path: [id], rootId: id, subtreeIds: [id]})));
+  state.data.folders = [{id: 'study', name: '学习分组', sortOrder: 0}];
+  state.data.lists.push(
+    {id: 'school', name: '学校', color: '#4772fa', folderId: null, archived: false, sortOrder: 1},
+    {id: 'structure', name: '数据结构', color: '#4772fa', folderId: null, parentListId: 'school', archived: false, sortOrder: 0},
+    {id: 'homework', name: '作业', color: '#4772fa', folderId: null, parentListId: 'structure', archived: false, sortOrder: 0},
+    {id: 'life', name: '生活', color: '#4772fa', folderId: null, archived: false, sortOrder: 2},
+    {id: 'book', name: '读书', color: '#4772fa', folderId: null, archived: false, sortOrder: 3},
+    {id: 'archived', name: '归档清单', color: '#4772fa', folderId: null, archived: true, sortOrder: 4},
+  );
+  state.listIndex = [
+    {id: 'inbox', name: '收集箱', parentId: null, path: ['收集箱'], rootId: 'inbox', subtreeIds: ['inbox'], folderId: null},
+    {id: 'school', name: '学校', parentId: null, path: ['学校'], rootId: 'school', subtreeIds: ['school', 'structure', 'homework'], folderId: null},
+    {id: 'structure', name: '数据结构', parentId: 'school', path: ['学校', '数据结构'], rootId: 'school', subtreeIds: ['structure', 'homework'], folderId: null},
+    {id: 'homework', name: '作业', parentId: 'structure', path: ['学校', '数据结构', '作业'], rootId: 'school', subtreeIds: ['homework'], folderId: null},
+    ...['life', 'book', 'archived'].map((id) => ({id, name: id === 'life' ? '生活' : id === 'book' ? '读书' : '归档清单', parentId: null, path: [id === 'life' ? '生活' : id === 'book' ? '读书' : '归档清单'], rootId: id, subtreeIds: [id], folderId: null})),
+  ];
+  state.data.tasks[0].listId = 'homework';
+  state.data.tasks[1].listId = 'structure';
+  state.data.tasks[2].listId = 'school';
+  return state;
+}
+async function beginHierarchyDrag(page: Page, navId: string) {
+  const source = page.locator(`[data-nav-id="${navId}"]`);
+  const box = (await source.boundingBox())!;
+  await page.mouse.move(box.x + Math.min(45, box.width / 2), box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + Math.min(45, box.width / 2) + 12, box.y + box.height / 2, {steps: 3});
+}
+async function moveHierarchyDrag(page: Page, selector: string, fraction = .5) {
+  const target = page.locator(selector).last();
+  const box = (await target.boundingBox())!;
+  await page.mouse.move(box.x + Math.min(60, box.width / 2), box.y + box.height * fraction, {steps: 6});
+  await page.mouse.move(box.x + Math.min(60, box.width / 2), box.y + box.height * fraction);
+}
+async function hierarchyCommands(page: Page) {
+  return page.evaluate(() => (window as any).__fixture.commands.filter((command: any) => ['tagMove', 'listMove'].includes(command.operation.type)));
+}
+for (const kind of ['tag', 'list'] as const) {
+  test(`ordinary ${kind} drags distinguish inside, edge order, root and cancellation`, async () => {
+    const page = await open('', dragHierarchyFixture());
+    try {
+      const source = kind === 'tag' ? 'tag:生活' : 'list:life';
+      const target = kind === 'tag' ? 'tag:学校' : 'list:school';
+      const wrapper = `[data-hierarchy-node="${target}"]`;
+      await beginHierarchyDrag(page, source);
+      await moveHierarchyDrag(page, wrapper);
+      assert.equal(await page.locator(wrapper).getAttribute('data-drop-position'), 'inside');
+      assert.equal(await page.locator(wrapper).getByText('移入', {exact: true}).count(), 1);
+      assert.equal(await page.getByRole('region', {name: '整理导航'}).count(), 0);
+      await mkdir('.local/hierarchy-drag-20261103/web-evidence', {recursive: true});
+      await page.screenshot({path: `.local/hierarchy-drag-20261103/web-evidence/${kind}-inside.png`});
+      await page.mouse.up();
+      await page.waitForFunction(() => (window as any).__fixture.commands.some((command: any) => ['tagMove', 'listMove'].includes(command.operation.type)));
+      let commands = await hierarchyCommands(page);
+      assert.deepEqual(commands[0].operation, kind === 'tag' ? {type: 'tagMove', id: '生活', target: {kind: 'tag', tagId: '学校', position: 'inside'}} : {type: 'listMove', id: 'life', target: {kind: 'list', listId: 'school', position: 'inside'}});
+      for (const [fraction, position] of [[.05, 'before'], [.95, 'after']] as const) {
+        await beginHierarchyDrag(page, source);
+        await moveHierarchyDrag(page, wrapper, fraction);
+        assert.equal(await page.locator(wrapper).getAttribute('data-drop-position'), position);
+        await page.mouse.up();
+        commands = await hierarchyCommands(page);
+        assert.equal(commands.at(-1).operation.target.position, position);
+      }
+      await beginHierarchyDrag(page, source);
+      await moveHierarchyDrag(page, kind === 'tag' ? '[data-tag-drop-root="true"]' : '[data-list-drop-group="root"]');
+      await page.mouse.up();
+      commands = await hierarchyCommands(page);
+      assert.deepEqual(commands.at(-1).operation.target, kind === 'tag' ? {kind: 'root'} : {kind: 'group', folderId: null});
+      const count = commands.length;
+      await beginHierarchyDrag(page, source);
+      await moveHierarchyDrag(page, wrapper);
+      await page.keyboard.press('Escape');
+      await page.mouse.up();
+      assert.equal((await hierarchyCommands(page)).length, count);
+    } finally { await page.close(); }
+  });
+}
+
+test('hierarchy drags refuse descendants and a fourth level; lists can leave for a folder', async () => {
+  const page = await open('', dragHierarchyFixture());
+  try {
+    await page.getByRole('button', {name: '展开标签 学校', exact: true}).click();
+    await page.getByRole('button', {name: '展开标签 学校 › 数据结构', exact: true}).click();
+    await page.getByRole('button', {name: '展开清单 学校', exact: true}).click();
+    await page.getByRole('button', {name: '展开清单 学校 › 数据结构', exact: true}).click();
+    for (const [source, target] of [['tag:学校', 'tag:学校/数据结构'], ['tag:生活', 'tag:学校/数据结构/作业'], ['list:school', 'list:structure'], ['list:life', 'list:homework']]) {
+      await beginHierarchyDrag(page, source);
+      await moveHierarchyDrag(page, `[data-hierarchy-node="${target}"]`);
+      assert.equal(await page.locator(`[data-hierarchy-node="${target}"]`).getAttribute('data-drop-position'), 'invalid');
+      await page.mouse.up();
+    }
+    assert.equal((await hierarchyCommands(page)).length, 0);
+    await beginHierarchyDrag(page, 'list:homework');
+    await moveHierarchyDrag(page, '[data-list-drop-group="study"]');
+    await page.mouse.up();
+    assert.deepEqual((await hierarchyCommands(page))[0].operation, {type: 'listMove', id: 'homework', target: {kind: 'group', folderId: 'study'}});
+  } finally { await page.close(); }
+});
+
+test('parent list views aggregate children and list selectors retain their paths', async () => {
+  const page = await open('', dragHierarchyFixture());
+  try {
+    assert.equal(await page.locator('[data-nav-id="list:structure"]').count(), 0);
+    assert.equal(await page.locator('[data-nav-id="list:school"] small').textContent(), '3');
+    await page.locator('[data-nav-id="list:school"]').click();
+    assert.equal(await page.locator('.task-row').count(), 3);
+    await page.locator('.task-row[data-task-id="structure"]').click();
+    assert.match(await page.locator('.destination-trigger').textContent() || '', /学校 › 数据结构 › 作业/);
+    await page.getByRole('button', {name: '添加任务 Ctrl+N', exact: true}).click();
+    const selector = page.getByRole('combobox', {name: '新任务所属清单', exact: true});
+    assert.match(await selector.locator('option[value="homework"]').textContent() || '', /学校 › 数据结构 › 作业/);
+    await page.getByRole('button', {name: '取消', exact: true}).click();
+    await page.getByRole('button', {name: '编辑清单 学校', exact: true}).click();
+    const dialog = page.getByRole('form', {name: '清单设置'});
+    assert.match(await dialog.locator('.tag-delete-hint').textContent() || '', /直属子清单会提升一级/);
+    assert.equal(await dialog.getByRole('combobox', {name: '所属父清单'}).locator('option[value="structure"]').count(), 0);
+  } finally { await page.close(); }
+});
+for (const kind of ['tag', 'list'] as const) {
+  for (const code of ['conflict', 'storage']) {
+    test(`${kind} drag ${code} keeps the tree and preserves the correct close guard`, async () => {
+      const page = await open('', dragHierarchyFixture());
+      try {
+        const type = kind === 'tag' ? 'tagMove' : 'listMove';
+        await page.evaluate(({type, code}) => { const f = (window as any).__fixture; f.failures[type] = 1; f.failureCodes[type] = code; }, {type, code});
+        const source = kind === 'tag' ? 'tag:生活' : 'list:life';
+        const target = kind === 'tag' ? 'tag:学校' : 'list:school';
+        await beginHierarchyDrag(page, source);
+        await moveHierarchyDrag(page, `[data-hierarchy-node="${target}"]`);
+        await page.mouse.up();
+        await page.getByText('模拟保存失败，内容已保留', {exact: true}).waitFor();
+        assert.equal(await page.locator(`[data-nav-id="${source}"]`).count(), 1);
+        assert.equal(await page.locator('[data-nav-id="tag:学校/生活"]').count(), 0);
+        assert.equal(await page.locator(`[data-hierarchy-node="${target}"]`).getAttribute('data-drop-position'), null);
+        await page.evaluate(() => (window as any).__fixture.emit('desktop://prepare-close', {window: 'main'}));
+        if (code === 'conflict') {
+          await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === 'closeMain'));
+          assert.equal(await page.getByText('1 项操作尚未确认保存', {exact: true}).count(), 0);
+        } else {
+          await page.getByText('还有未确认保存的操作，请先重试或放弃这些操作，再关闭。', {exact: true}).waitFor();
+          assert.equal(await page.evaluate(() => (window as any).__fixture.actions.some((item: any) => item.action === 'closeMain')), false);
+          await page.getByRole('button', {name: '重试保存', exact: true}).click();
+          await page.getByText('1 项操作尚未确认保存', {exact: true}).waitFor({state: 'detached'});
+          const commands = await hierarchyCommands(page);
+          assert.equal(commands[0].requestId, commands[1].requestId);
+        }
+      } finally { await page.close(); }
+    });
+  }
+}
+
+test('list parent editing clears a standalone folder and submits the chosen parent', async () => {
+  const page = await open('', dragHierarchyFixture());
+  try {
+    await page.getByRole('button', {name: '编辑清单 生活', exact: true}).click();
+    const dialog = page.getByRole('form', {name: '清单设置'});
+    const parent = dialog.getByRole('combobox', {name: '所属父清单'});
+    await parent.selectOption('school');
+    assert.equal(await dialog.getByRole('combobox', {name: '清单分组'}).inputValue(), '');
+    await dialog.getByRole('combobox', {name: '清单分组'}).selectOption('study');
+    assert.equal(await parent.inputValue(), '');
+    await parent.selectOption('school');
+    await dialog.getByRole('button', {name: '保存', exact: true}).click();
+    await page.waitForFunction(() => (window as any).__fixture.commands.some((command: any) => command.operation.type === 'collectionUpsert'));
+    const operation = await page.evaluate(() => (window as any).__fixture.commands.find((command: any) => command.operation.type === 'collectionUpsert').operation);
+    assert.equal(operation.value.id, 'life');
+    assert.equal(operation.value.parentListId, 'school');
+    assert.equal(operation.value.folderId, null);
+  } finally { await page.close(); }
+});
+for (const destination of ['tag:学校', 'list:school']) {
+  test(`task dragging to ${destination} keeps the task-move action`, async () => {
+    const page = await open('', dragHierarchyFixture());
+    try {
+      await page.locator('.task-row[data-task-id="structure"]').dragTo(page.locator(`[data-nav-id="${destination}"]`));
+      await page.waitForFunction(() => (window as any).__fixture.commands.some((command: any) => command.operation.type === 'taskMove'));
+      const command = await page.evaluate(() => (window as any).__fixture.commands.find((command: any) => command.operation.type === 'taskMove').operation);
+      assert.deepEqual(command, {type: 'taskMove', id: 'structure', view: destination});
+      assert.equal((await hierarchyCommands(page)).length, 0);
+      assert.equal(await page.getByRole('region', {name: '整理导航'}).count(), 0);
+    } finally { await page.close(); }
+  });
+}

@@ -233,6 +233,7 @@ fn csv(text: &str, now: DateTime<Utc>) -> Result<Imported, CoreError> {
                 name: name.into(),
                 color: "#4772FA".into(),
                 folder_id: None,
+                parent_list_id: None,
                 archived: false,
                 sort_order: data.lists.len() as f64,
             });

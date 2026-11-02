@@ -118,6 +118,7 @@ const appSchema = z.object({
         name: z.string().trim().min(1).max(500),
         color: colorSchema,
         folderId: idSchema.nullable(),
+        parentListId: idSchema.nullable().optional().transform((value) => value ?? undefined),
         archived: z.boolean(),
         sortOrder: z.number().finite(),
       }),

@@ -22,7 +22,7 @@ pub struct Task {
     #[serde(default = "user_source")] pub created_by: String,
     #[serde(default = "approved")] pub agent_status: String,
 }
-pub struct TaskList { pub id: String, pub name: String, pub color: String, pub folder_id: Option<String>, pub archived: bool, pub sort_order: f64 }
+pub struct TaskList { pub id: String, pub name: String, pub color: String, pub folder_id: Option<String>, #[serde(default, skip_serializing_if = "Option::is_none")] #[ts(optional)] pub parent_list_id: Option<String>, pub archived: bool, pub sort_order: f64 }
 pub struct Folder { pub id: String, pub name: String, pub sort_order: f64 }
 pub struct Habit { pub id: String, pub name: String, pub icon: String, pub color: String, pub goal: u32, pub days: Vec<u8>, pub records: BTreeMap<String, u32>, pub created_at: String }
 pub struct SavedFilter { pub id: String, pub name: String, pub query: String, pub color: String }
@@ -30,6 +30,7 @@ pub struct FocusSession { pub id: String, pub task_id: Option<String>, pub title
 #[derive(Default)]
 pub struct NavigationPreferences { #[serde(default)] pub orders: BTreeMap<String, Vec<String>>, #[serde(default)] pub hidden: Vec<String> }
 pub struct TagInfo { pub id: String, pub name: String, pub parent_id: Option<String>, pub path: Vec<String>, pub root_id: String, pub subtree_ids: Vec<String> }
+pub struct ListInfo { pub id: String, pub name: String, pub parent_id: Option<String>, pub path: Vec<String>, pub root_id: String, pub subtree_ids: Vec<String>, pub folder_id: Option<String> }
 pub struct Settings {
     pub theme: String, pub accent: String, pub week_start: u8, pub show_completed: bool, pub calendar_mode: String,
     pub sidebar_collapsed: bool, pub default_view: String, pub pomodoro_minutes: u32, pub break_minutes: u32,
@@ -50,6 +51,7 @@ pub struct CoreSnapshot {
     pub approvals: Vec<Approval>, pub reminders: Vec<ReminderEvent>, pub focus: FocusState,
     pub preferences: Preferences, pub today_count: u32, pub pending_count: u32, pub reminder_count: u32,
     #[serde(default)] pub tag_index: Vec<TagInfo>,
+    #[serde(default)] pub list_index: Vec<ListInfo>,
 }
 pub struct CoreCommand { pub request_id: String, pub operation: Operation }
 pub struct CommandReceipt { pub request_id: String, pub status: String, #[ts(type = "number")] pub revision: u64, pub result: Value, pub created_at: String }
@@ -145,6 +147,10 @@ pub enum Operation {
         #[serde(default)]
         original: Option<String>,
     },
+    TagMove {
+        id: String,
+        target: TagMoveTarget,
+    },
     TagDelete {
         name: String,
     },
@@ -182,6 +188,13 @@ pub enum Operation {
 pub enum ListMoveTarget {
     Group { folder_id: Option<String> },
     List { list_id: String, position: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, TS)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum TagMoveTarget {
+    Root,
+    Tag { tag_id: String, position: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

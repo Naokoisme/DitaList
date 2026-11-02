@@ -23,10 +23,13 @@ import {
   X,
 } from "lucide-react";
 import type { AppData, CalendarMode, Task, TaskList } from "../model";
+import type { ListInfo } from "../generated/contracts";
+import { displayListIndex, listPath } from "../core/hierarchy";
 import "../calendar.css";
 
 interface CalendarViewProps {
   data: AppData;
+  listIndex?: readonly ListInfo[];
   anchor: string;
   mode: CalendarMode;
   onAnchorChange: (date: string) => void;
@@ -243,6 +246,7 @@ function timeEvents(tasks: Task[], date: string): TimedEvent[] {
 
 export default function CalendarView({
   data,
+  listIndex,
   anchor,
   mode,
   onAnchorChange,
@@ -255,6 +259,7 @@ export default function CalendarView({
   onBacklogChange,
   detailPanel,
 }: CalendarViewProps) {
+  const indexedLists = displayListIndex(data, listIndex);
   const today = localDate(new Date());
   const [openPopover, setOpenPopover] = useState<"date" | "lists" | "options" | null>(null);
   const [pickerMode, setPickerMode] = useState<"days" | "months">("days");
@@ -863,7 +868,7 @@ export default function CalendarView({
                         {list.id === "inbox"
                           ? <Inbox size={16} style={{ color: list.color }} />
                           : <ListTodo size={16} style={{ color: list.color }} />}
-                        <span>{list.name}</span>
+                        <span title={listPath(indexedLists, list.id)}>{listPath(indexedLists, list.id)}</span>
                       </button>
                     ))}
                   </div>

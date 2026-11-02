@@ -1,5 +1,5 @@
 use crate::{
-    domain, focus, import, navigation, reminders,
+    domain, focus, import, lists, navigation, reminders,
     storage::{Persisted, RecordedRequest, Store},
     tags, validation,
 };
@@ -83,6 +83,7 @@ impl CoreService {
             pending_count,
             reminder_count,
             tag_index: tags::index(&state.data),
+            list_index: lists::index(&state.data),
         }
     }
 
@@ -869,6 +870,11 @@ fn apply(
             rewrite_approval_tags(state, &std::collections::BTreeMap::new(), &removed);
             Ok(("saved", json!({"name":name})))
         }
+        Operation::TagMove { id, target } => {
+            let (id, mapping) = tags::move_tag(&mut state.data, id, target, now)?;
+            rewrite_approval_tags(state, &mapping, &BTreeSet::new());
+            Ok(("saved", json!({"id":id,"mapping":mapping})))
+        }
         Operation::HabitRecord { id, date, value } => {
             let day = validation::date(date)?;
             let habit = state
@@ -970,7 +976,15 @@ fn upsert_collection(
     value: &Value,
 ) -> Result<(&'static str, Value), CoreError> {
     let allowed: &[&str] = match collection {
-        "lists" => &["id", "name", "color", "folderId", "archived", "sortOrder"],
+        "lists" => &[
+            "id",
+            "name",
+            "color",
+            "folderId",
+            "parentListId",
+            "archived",
+            "sortOrder",
+        ],
         "folders" => &["id", "name", "sortOrder"],
         "habits" => &[
             "id",
@@ -1016,7 +1030,7 @@ fn upsert_collection(
             }
             let entity: TaskList = serde_json::from_value(value.clone())
                 .map_err(|e| validation::invalid(format!("实体格式错误：{e}")))?;
-            navigation::upsert_list(&mut state.data, entity);
+            navigation::upsert_list(&mut state.data, entity)?;
         }
         "folders" => upsert!(state.data.folders, Folder),
         "habits" => upsert!(state.data.habits, Habit),
@@ -1046,15 +1060,10 @@ fn delete_collection(
                     task.updated_at = domain::stamp(now);
                 }
             }
-            state.data.lists.retain(|entry| entry.id != id);
+            navigation::delete_list(&mut state.data, id)?;
         }
         "folders" => {
-            state.data.folders.retain(|entry| entry.id != id);
-            for list in &mut state.data.lists {
-                if list.folder_id.as_deref() == Some(id) {
-                    list.folder_id = None;
-                }
-            }
+            navigation::delete_folder(&mut state.data, id);
         }
         "habits" => state.data.habits.retain(|entry| entry.id != id),
         "filters" => state.data.filters.retain(|entry| entry.id != id),

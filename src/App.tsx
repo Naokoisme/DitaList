@@ -71,11 +71,12 @@ import {
   localDate,
   parseQuickInput,
 } from "./core/domain";
-import { desktopAction, desktopStatus, errorMessage, executeOperation, exportBackup, getSnapshot, importBackup, isRejectedTagUpsert, watchCore, watchNavigation, type Snapshot } from "./core/client";
+import { desktopAction, desktopStatus, errorMessage, executeOperation, exportBackup, getSnapshot, importBackup, isRejectedHierarchyOperation, watchCore, watchNavigation, type Snapshot } from "./core/client";
 import { installMainWindowState } from "./desktop/mainWindow";
 import { listen } from "@tauri-apps/api/event";
-import type { CommandReceipt, Operation, TagInfo } from "./generated/contracts";
+import type { CommandReceipt, Operation, TagInfo, ListInfo, TagMoveTarget } from "./generated/contracts";
 import { compactTaskTags, displayTagIndex, tagName, tagPath, taskHasTag, taskMatchesTagSearch } from "./core/tags";
+import { canDropHierarchy, displayListIndex, hierarchyDropPosition, listPath, taskInList } from "./core/hierarchy";
 import TagPicker from "./components/TagPicker";
 import AgentReviewPanel from "./components/AgentReviewPanel";
 import McpSettings from "./components/McpSettings";
@@ -299,6 +300,10 @@ export default function App() {
   const [draggingTaskId, setDraggingTaskId] = useState<string | null>(null);
   const [draggingListId, setDraggingListId] = useState<string | null>(null);
   const [listDropTarget, setListDropTarget] = useState<ListMoveTarget | null>(null);
+  const [draggingTagId, setDraggingTagId] = useState<string | null>(null);
+  const [tagDropTarget, setTagDropTarget] = useState<TagMoveTarget | null>(null);
+  const [invalidHierarchyDrop, setInvalidHierarchyDrop] = useState<string | null>(null);
+  const [revealHierarchy, setRevealHierarchy] = useState<{kind: "tag" | "list"; id: string; nonce: number} | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const searchTargetId = useRef<string | null>(null);
   const latestSnapshot = useRef<Snapshot | null>(null);
@@ -350,12 +355,19 @@ export default function App() {
       failedWrites.current.delete(key);
       setFailedWriteCount(failedWrites.current.size);
       setSaveStatus(failedWrites.current.size ? "error" : "saved");
+      if (operation.type === "tagMove") {
+        const mapping = new Map(Object.entries((receipt.result as {mapping?: Record<string, string>}).mapping || {}));
+        setView((current) => current.startsWith("tag:") && mapping.has(current.slice(4)) ? `tag:${mapping.get(current.slice(4))!}` : current);
+        setTaskFilters((current) => Object.fromEntries(Object.entries(current).map(([key, value]) => [key.startsWith("tag:") && mapping.has(key.slice(4)) ? `tag:${mapping.get(key.slice(4))!}` : key, value])));
+        if (operation.target.kind === "tag" && operation.target.position === "inside") setRevealHierarchy((before) => ({kind: "tag", id: operation.target.kind === "tag" ? operation.target.tagId : "", nonce: (before?.nonce || 0) + 1}));
+      }
+      if (operation.type === "listMove" && operation.target.kind === "list" && operation.target.position === "inside") setRevealHierarchy((before) => ({kind: "list", id: operation.target.kind === "list" ? operation.target.listId : "", nonce: (before?.nonce || 0) + 1}));
       // The receipt already proves the write. A refresh failure must not turn it into an unsaved operation.
       try { acceptSnapshot(await getSnapshot()); }
       catch (error) { setToast(`已保存，但刷新界面失败：${errorMessage(error)}`); }
       return receipt;
     } catch (error) {
-      if (!isRejectedTagUpsert(operation, error)) failedWrites.current.set(key, operation);
+      if (!isRejectedHierarchyOperation(operation, error)) failedWrites.current.set(key, operation);
       setFailedWriteCount(failedWrites.current.size);
       setSaveStatus(failedWrites.current.size ? "error" : "saved");
       setToast(errorMessage(error));
@@ -556,6 +568,7 @@ export default function App() {
   }, [go, openNewTask]);
   const selected = data?.tasks.find((t) => t.id === selectedId) || null;
   const tagIndex = useMemo(() => displayTagIndex(data, snapshot?.tagIndex), [data, snapshot?.tagIndex]);
+  const listIndex = useMemo(() => displayListIndex(data, snapshot?.listIndex), [data, snapshot?.listIndex]);
   const active =
     data?.tasks.filter((t) => !t.deletedAt && !t.completedAt && t.agentStatus !== "pending") || [];
   const tags = useMemo(
@@ -570,7 +583,7 @@ export default function App() {
     [data?.tasks, data?.settings.customTags],
   );
   const title = view.startsWith("list:")
-    ? data?.lists.find((l) => l.id === view.slice(5))?.name || "清单"
+    ? listPath(listIndex, view.slice(5))
     : view.startsWith("tag:")
       ? tagPath(tagIndex, view.slice(4))
       : view.startsWith("filter:")
@@ -595,7 +608,7 @@ export default function App() {
     else if (view === "inbox")
       tasks = tasks.filter((t) => t.listId === "inbox");
     else if (view.startsWith("list:"))
-      tasks = tasks.filter((t) => t.listId === view.slice(5));
+      tasks = tasks.filter((t) => taskInList(t, view.slice(5), listIndex));
     else if (view.startsWith("tag:"))
       tasks = tasks.filter((t) => taskHasTag(t, view.slice(4), tagIndex));
     else if (view.startsWith("filter:"))
@@ -619,7 +632,7 @@ export default function App() {
               : a.sortOrder - b.sortOrder) ||
         a.createdAt.localeCompare(b.createdAt),
     );
-  }, [data, view, sort, taskFilter, tagIndex]);
+  }, [data, view, sort, taskFilter, tagIndex, listIndex]);
   const openTasks = visibleTasks.filter(
     (t) => !t.completedAt || view === "trash",
   );
@@ -776,38 +789,55 @@ export default function App() {
   const orderedLists = data.lists
     .filter((list) => list.id !== "inbox" && !list.archived)
     .sort((a, b) => a.sortOrder - b.sortOrder);
-  const hasDropHintTask = !draggingListId && Boolean(draggingTaskId || selectedId);
+  const hasDropHintTask = !draggingListId && !draggingTagId && Boolean(draggingTaskId || selectedId);
 
-  const handleListDrop = (e: React.DragEvent, target: ListMoveTarget) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const listId = e.dataTransfer.getData("text/dida-list");
-    setDraggingListId(null);
-    setListDropTarget(null);
-    if (!listId || listId !== draggingListId) return;
-    void perform({type: "listMove", id: listId, target});
+  const validListDrop = (source: string, target: ListMoveTarget) => {
+    const sourceList = data.lists.find((list) => list.id === source);
+    if (!sourceList || sourceList.archived || source === "inbox") return false;
+    if (target.kind === "group") return !target.folderId || data.folders.some((folder) => folder.id === target.folderId);
+    const destination = data.lists.find((list) => list.id === target.listId);
+    return !!destination && !destination.archived && destination.id !== "inbox" && canDropHierarchy(listIndex, source, destination.id, target.position);
   };
-
+  const handleListDrop = async (e: React.DragEvent, target: ListMoveTarget) => {
+    e.preventDefault(); e.stopPropagation();
+    const source = e.dataTransfer.getData("text/dida-list");
+    const valid = source === draggingListId && validListDrop(source, target);
+    setDraggingListId(null); setListDropTarget(null); setInvalidHierarchyDrop(null);
+    return valid && Boolean(await perform({type: "listMove", id: source, target}));
+  };
   const listGroupDropProps = (folderId: string | null) => ({
+    "data-list-drop-group": folderId || "root",
     onDragOver: (e: React.DragEvent<HTMLElement>) => {
       if (!draggingListId || !e.dataTransfer.types.includes("text/dida-list")) return;
-      e.preventDefault();
-      e.stopPropagation();
-      e.dataTransfer.dropEffect = "move";
-      setListDropTarget({ kind: "group", folderId });
+      e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move";
+      setListDropTarget({kind: "group", folderId}); setInvalidHierarchyDrop(null);
     },
     onDragLeave: (e: React.DragEvent<HTMLElement>) => {
       if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
-      setListDropTarget((target) => target?.kind === "group" &&
-        target.folderId === folderId ? null : target);
+      setListDropTarget((target) => target?.kind === "group" && target.folderId === folderId ? null : target);
     },
     onDrop: (e: React.DragEvent<HTMLElement>) => {
       if (!e.dataTransfer.types.includes("text/dida-list")) return;
       const details = e.currentTarget.closest("details");
-      handleListDrop(e, { kind: "group", folderId });
-      if (details) details.open = true;
+      void handleListDrop(e, {kind: "group", folderId}).then((saved) => { if (saved && details) details.open = true; });
     },
   });
+  const tagRootDropProps = {
+    "data-tag-drop-root": "true",
+    onDragOver: (e: React.DragEvent<HTMLElement>) => {
+      if (!draggingTagId || !e.dataTransfer.types.includes("text/dida-tag")) return;
+      e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = "move";
+      setTagDropTarget({kind: "root"}); setInvalidHierarchyDrop(null);
+    },
+    onDragLeave: (e: React.DragEvent<HTMLElement>) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setTagDropTarget((target) => target?.kind === "root" ? null : target); },
+    onDrop: (e: React.DragEvent<HTMLElement>) => {
+      if (!e.dataTransfer.types.includes("text/dida-tag")) return;
+      e.preventDefault(); e.stopPropagation();
+      const id = e.dataTransfer.getData("text/dida-tag");
+      if (id && id === draggingTagId) void perform({type: "tagMove", id, target: {kind: "root"}});
+      setDraggingTagId(null); setTagDropTarget(null); setInvalidHierarchyDrop(null);
+    },
+  };
 
   const sidebarItem = (
     id: ViewId,
@@ -873,7 +903,8 @@ export default function App() {
     return (
       <div
         key={l.id}
-        className={`sidebar-list-item ${draggingListId === l.id ? "is-list-dragging" : ""} ${dropPosition ? `list-drop-${dropPosition}` : ""}`}
+        className={`sidebar-list-item ${draggingListId === l.id ? "is-list-dragging" : ""} ${dropPosition ? `list-drop-${dropPosition}` : ""} ${invalidHierarchyDrop === navId ? "hierarchy-drop-invalid" : ""}`}
+        data-hierarchy-node={navId} data-drop-position={invalidHierarchyDrop === navId ? "invalid" : dropPosition || undefined}
         onContextMenu={(e) => {
           e.preventDefault();
           setListDialog(l);
@@ -881,15 +912,11 @@ export default function App() {
         onDragOver={(e) => {
           if (e.dataTransfer.types.includes("text/dida-list")) {
             e.stopPropagation();
-            if (!draggingListId || draggingListId === l.id) return;
-            e.preventDefault();
-            e.dataTransfer.dropEffect = "move";
-            const bounds = e.currentTarget.getBoundingClientRect();
-            setListDropTarget({
-              kind: "list",
-              listId: l.id,
-              position: e.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
-            });
+            if (!draggingListId) return;
+            const target: ListMoveTarget = {kind: "list", listId: l.id, position: hierarchyDropPosition(e.clientY, e.currentTarget.getBoundingClientRect())};
+            if (!validListDrop(draggingListId, target)) { e.dataTransfer.dropEffect = "none"; setListDropTarget(null); setInvalidHierarchyDrop(navId); return; }
+            e.preventDefault(); e.dataTransfer.dropEffect = "move";
+            setInvalidHierarchyDrop(null); setListDropTarget(target);
             return;
           }
           if (!e.dataTransfer.types.includes("text/dida-task")) return;
@@ -899,6 +926,7 @@ export default function App() {
         onDragLeave={(e) => {
           if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
           if (dragOverNav === navId) setDragOverNav(null);
+          setInvalidHierarchyDrop((id) => id === navId ? null : id);
           setListDropTarget((target) => target?.kind === "list" &&
             target.listId === l.id ? null : target);
         }}
@@ -908,7 +936,7 @@ export default function App() {
             handleListDrop(e, {
               kind: "list",
               listId: l.id,
-              position: e.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+              position: hierarchyDropPosition(e.clientY, bounds),
             });
             return;
           }
@@ -920,18 +948,18 @@ export default function App() {
         <button
           className={`sidebar-item draggable-list ${view === navId ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === navId ? "drag-over" : ""}`}
           draggable
-          title="拖动调整顺序或移入分组；双击可编辑清单"
+          title={`${listPath(listIndex, l.id)} · 拖到中央移入，上下边缘排序`}
           onDragStart={(e) => {
             e.dataTransfer.setData("text/dida-list", l.id);
             e.dataTransfer.effectAllowed = "move";
-            setDraggingListId(l.id);
+            setDraggingListId(l.id); setDraggingTagId(null); setInvalidHierarchyDrop(null);
             setDraggingTaskId(null);
             setDragOverNav(null);
             setListDropTarget(null);
           }}
           onDragEnd={() => {
             setDraggingListId(null);
-            setListDropTarget(null);
+            setListDropTarget(null); setInvalidHierarchyDrop(null);
           }}
           onClick={() => go(navId)}
           onDoubleClick={() => setListDialog(l)}
@@ -939,15 +967,17 @@ export default function App() {
         >
           <List size={17} style={{ color: l.color }} />
           <span>{l.name}</span>
-          <small>{active.filter((t) => t.listId === l.id).length || ""}</small>
+          <small>{active.filter((t) => taskInList(t, l.id, listIndex)).length || ""}</small>
         </button>
         <button
           className="list-edit-button"
-          aria-label={`编辑清单 ${l.name}`}
+          aria-label={`编辑清单 ${listPath(listIndex, l.id)}`}
           onClick={() => setListDialog(l)}
         >
           <MoreHorizontal size={14} />
         </button>
+        {dropPosition === "inside" && <small className="hierarchy-drop-label">移入</small>}
+        {invalidHierarchyDrop === navId && <small className="hierarchy-drop-label">无法放入</small>}
       </div>
     );
   };
@@ -955,23 +985,42 @@ export default function App() {
     const navId: ViewId = `tag:${t}`;
     const isDropCandidate = view !== navId && hasDropHintTask;
     const count = active.filter((x) => taskHasTag(x, t, tagIndex)).length;
+    const dropPosition = tagDropTarget?.kind === "tag" && tagDropTarget.tagId === t ? tagDropTarget.position : "";
     return (
       <div
         key={t}
-        className="sidebar-list-item"
+        className={`sidebar-list-item ${draggingTagId === t ? "is-list-dragging" : ""} ${dropPosition ? `list-drop-${dropPosition}` : ""} ${invalidHierarchyDrop === navId ? "hierarchy-drop-invalid" : ""}`}
+        data-hierarchy-node={navId} data-drop-position={invalidHierarchyDrop === navId ? "invalid" : dropPosition || undefined}
         onContextMenu={(e) => {
           e.preventDefault();
           setTagDialog({ mode: "edit", name: t });
         }}
         onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("text/dida-tag")) {
+            e.stopPropagation();
+            if (!draggingTagId) return;
+            const position = hierarchyDropPosition(e.clientY, e.currentTarget.getBoundingClientRect());
+            if (!canDropHierarchy(tagIndex, draggingTagId, t, position)) { e.dataTransfer.dropEffect = "none"; setTagDropTarget(null); setInvalidHierarchyDrop(navId); return; }
+            e.preventDefault(); e.dataTransfer.dropEffect = "move"; setInvalidHierarchyDrop(null); setTagDropTarget({kind: "tag", tagId: t, position}); return;
+          }
           if (!e.dataTransfer.types.includes("text/dida-task")) return;
           e.preventDefault();
           if (dragOverNav !== navId) setDragOverNav(navId);
         }}
-        onDragLeave={() => {
+        onDragLeave={(e) => {
+          if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
           if (dragOverNav === navId) setDragOverNav(null);
+          setInvalidHierarchyDrop((id) => id === navId ? null : id);
+          setTagDropTarget((target) => target?.kind === "tag" && target.tagId === t ? null : target);
         }}
         onDrop={(e) => {
+          if (e.dataTransfer.types.includes("text/dida-tag")) {
+            e.preventDefault(); e.stopPropagation();
+            const id = e.dataTransfer.getData("text/dida-tag");
+            const position = hierarchyDropPosition(e.clientY, e.currentTarget.getBoundingClientRect());
+            if (id === draggingTagId && canDropHierarchy(tagIndex, id, t, position)) void perform({type: "tagMove", id, target: {kind: "tag", tagId: t, position}});
+            setDraggingTagId(null); setTagDropTarget(null); setInvalidHierarchyDrop(null); return;
+          }
           if (!e.dataTransfer.types.includes("text/dida-task")) return;
           e.preventDefault();
           handleSidebarDrop(navId, e.dataTransfer.getData("text/dida-task"));
@@ -979,7 +1028,10 @@ export default function App() {
       >
         <button
           className={`sidebar-item ${view === navId ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === navId ? "drag-over" : ""}`}
-          title={`${tagPath(tagIndex, t)} · 包含全部下级标签的任务`}
+          title={`${tagPath(tagIndex, t)} · 拖到中央移入，上下边缘排序`}
+          draggable
+          onDragStart={(e) => { e.dataTransfer.setData("text/dida-tag", t); e.dataTransfer.effectAllowed = "move"; setDraggingTagId(t); setDraggingListId(null); setDraggingTaskId(null); setDragOverNav(null); setTagDropTarget(null); setInvalidHierarchyDrop(null); }}
+          onDragEnd={() => { setDraggingTagId(null); setTagDropTarget(null); setInvalidHierarchyDrop(null); }}
           onClick={() => go(navId)}
           onDoubleClick={() => setTagDialog({ mode: "edit", name: t })}
           data-nav-id={navId}
@@ -996,6 +1048,8 @@ export default function App() {
         >
           <MoreHorizontal size={14} />
         </button>
+        {dropPosition === "inside" && <small className="hierarchy-drop-label">移入</small>}
+        {invalidHierarchyDrop === navId && <small className="hierarchy-drop-label">无法放入</small>}
         {(tagIndex.find((tag) => tag.id === t)?.path.length || 1) < 3 && <button type="button" className="tag-child-add" aria-label={`在${tagPath(tagIndex, t)}下新建子标签`} title="添加子标签" onClick={() => setTagDialog({mode: "create", name: "", parent: t})}><Plus size={13}/></button>}
       </div>
     );
@@ -1007,6 +1061,7 @@ export default function App() {
       task={selected}
       data={data}
       tagIndex={tagIndex}
+      listIndex={listIndex}
       onPatch={(patch) => patchTask(selected.id, patch)}
       onToggle={() => toggle(selected.id)}
       onClose={() => setSelectedId(null)}
@@ -1032,6 +1087,11 @@ export default function App() {
         active={active}
         tags={tags}
         tagIndex={tagIndex}
+        listIndex={listIndex}
+        draggingTagId={draggingTagId}
+        tagRootDropProps={tagRootDropProps}
+        tagRootHighlighted={tagDropTarget?.kind === "root"}
+        revealHierarchy={revealHierarchy}
         saveStatus={saveStatus}
         saveStatusLabel={saveStatusLabels[saveStatus]}
         sidebarOpen={sidebarOpen}
@@ -1069,6 +1129,7 @@ export default function App() {
           <AgentReviewPanel snapshot={snapshot!} onCommand={perform} onOpenSidebar={() => setSidebarOpen(true)}/>
         ) : view === "calendar" ? (
           <CalendarView
+            listIndex={listIndex}
             key={calendarKey}
             data={data}
             anchor={anchor}
@@ -1230,6 +1291,7 @@ export default function App() {
                     <TaskRow
                       key={t.id}
                       task={t}
+                      listLabel={listPath(listIndex, t.listId)}
                       tagIndex={tagIndex}
                       list={data.lists.find((l) => l.id === t.listId)}
                       selected={selectedId === t.id}
@@ -1332,6 +1394,7 @@ export default function App() {
                         <TaskRow
                           key={t.id}
                           task={t}
+                      listLabel={listPath(listIndex, t.listId)}
                       tagIndex={tagIndex}
                           list={data.lists.find((l) => l.id === t.listId)}
                           selected={selectedId === t.id}
@@ -1455,6 +1518,7 @@ export default function App() {
       {createDialog && (
         <NewTaskDialog
           data={data}
+          listIndex={listIndex}
           defaultList={currentListId}
           date={createDialog.date}
           endDate={createDialog.endDate}
@@ -1480,21 +1544,28 @@ export default function App() {
         <ListDialog
           value={listDialog}
           data={data}
+          listIndex={listIndex}
           onClose={() => setListDialog(null)}
-          onSave={async (name, color, folderId) => {
+          onSave={async (name, color, folderId, parentListId) => {
             const id = typeof listDialog === "object" ? listDialog.id : listDraftId.current;
             const value = listDialog === "folder"
               ? {id, name, sortOrder: data.folders.length}
-              : {...(typeof listDialog === "object" ? listDialog : {id, archived: false, sortOrder: data.lists.length}), name, color, folderId};
+              : {...(typeof listDialog === "object" ? listDialog : {id, archived: false, sortOrder: data.lists.length}), name, color, folderId: parentListId ? null : folderId, parentListId};
             if (await perform({type: "collectionUpsert", collection: listDialog === "folder" ? "folders" : "lists", value})) {
               if (listDialog === "list") go(`list:${id}`);
-              setListDialog(null);
+              setListDialog(null); return true;
             }
+            return false;
           }}
+          onDelete={typeof listDialog === "object" ? async () => {
+            if (!await perform({type: "collectionDelete", collection: "lists", id: listDialog.id})) return false;
+            setListDialog(null); if (view === `list:${listDialog.id}`) go("all"); return true;
+          } : undefined}
           onArchive={typeof listDialog === "object" ? async () => {
             if (await perform({type: "collectionUpsert", collection: "lists", value: {...listDialog, archived: true}})) {
-              setListDialog(null); go("all");
+              setListDialog(null); go("all"); return true;
             }
+            return false;
           } : undefined}
         />
       )}
@@ -1772,6 +1843,7 @@ function TaskRow({
   selected,
   dragging,
   showList,
+  listLabel,
   tagIndex,
   onSelect,
   onDragStartTask,
@@ -1786,6 +1858,7 @@ function TaskRow({
   selected: boolean;
   dragging?: boolean;
   showList?: boolean;
+  listLabel?: string;
   tagIndex: readonly TagInfo[];
   onSelect: () => void;
   onDragStartTask?: () => void;
@@ -1871,8 +1944,8 @@ function TaskRow({
           </span>
         ))}
         {showList && list && (
-          <small className="row-list" style={{ color: list.color }}>
-            {list.name}
+          <small className="row-list" title={listLabel || list.name} style={{ color: list.color }}>
+            {listLabel || list.name}
           </small>
         )}
         {task.repeat !== "none" && <RotateCcw size={12} />}
@@ -1896,6 +1969,7 @@ function TaskDetail({
   task,
   data,
   tagIndex,
+  listIndex,
   onPatch,
   onToggle,
   onClose,
@@ -1909,6 +1983,7 @@ function TaskDetail({
   task: Task;
   data: AppData;
   tagIndex: readonly TagInfo[];
+  listIndex: readonly ListInfo[];
   onPatch: (patch: Partial<Task>) => Promise<CommandReceipt | null>;
   onToggle: () => void;
   onClose: () => void;
@@ -2114,6 +2189,7 @@ function TaskDetail({
           <TaskDestinationSelect
             listId={task.listId}
             lists={data.lists}
+            listIndex={listIndex}
             ariaLabel="所属清单"
             popUp
             onNewList={onNewList}
@@ -2256,6 +2332,7 @@ export function CustomSelect<T extends string | number>({
 function TaskDestinationSelect({
   listId,
   lists,
+  listIndex,
   ariaLabel,
   popUp = false,
   onChange,
@@ -2263,6 +2340,7 @@ function TaskDestinationSelect({
 }: {
   listId: string;
   lists: TaskList[];
+  listIndex: readonly ListInfo[];
   ariaLabel: string;
   popUp?: boolean;
   onChange: (patch: { listId: string }, notice?: string) => void;
@@ -2286,7 +2364,7 @@ function TaskDestinationSelect({
       >
         {availableLists.map((list) => (
           <option key={list.id} value={list.id}>
-            {list.name}
+            {listPath(listIndex, list.id)}
           </option>
         ))}
       </select>
@@ -2303,7 +2381,7 @@ function TaskDestinationSelect({
           style={{ background: currentList?.color || "#4772fa" }}
         />
         <span className="destination-trigger-text">
-          清单：{currentList?.name || "收集箱"}
+          清单：{currentList ? listPath(listIndex, currentList.id) : "收集箱"}
         </span>
         <ChevronDown size={13} />
       </button>
@@ -2334,7 +2412,7 @@ function TaskDestinationSelect({
                 key={list.id}
                 className={`custom-select-option ${list.id === listId ? "is-selected" : ""}`}
                 onClick={() => {
-                  onChange({ listId: list.id }, `已归入清单「${list.name}」`);
+                  onChange({ listId: list.id }, `已归入清单「${listPath(listIndex, list.id)}」`);
                   setOpen(false);
                 }}
               >
@@ -2343,7 +2421,7 @@ function TaskDestinationSelect({
                     className="custom-select-dot"
                     style={{ background: list.color }}
                   />
-                  {list.name}
+                  {listPath(listIndex, list.id)}
                   {list.id === "inbox" && <small>默认</small>}
                 </span>
                 {list.id === listId && <Check size={13} />}
@@ -2484,6 +2562,7 @@ function CustomTimeInput({
 
 function NewTaskDialog({
   data,
+  listIndex,
   defaultList,
   date,
   endDate,
@@ -2493,6 +2572,7 @@ function NewTaskDialog({
   onNewList,
 }: {
   data: AppData;
+  listIndex: readonly ListInfo[];
   defaultList: string;
   date: string | null;
   endDate?: string;
@@ -2599,6 +2679,7 @@ function NewTaskDialog({
           <TaskDestinationSelect
             listId={list}
             lists={data.lists}
+            listIndex={listIndex}
             ariaLabel="新任务所属清单"
             onNewList={onNewList}
             onChange={(patch) => {
@@ -2772,108 +2853,48 @@ function DateDialog({
   );
 }
 
-function ListDialog({
-  value,
-  data,
-  onClose,
-  onSave,
-  onArchive,
-}: {
-  value: "list" | "folder" | TaskList;
-  data: AppData;
+function ListDialog({value, data, listIndex, onClose, onSave, onArchive, onDelete}: {
+  value: "list" | "folder" | TaskList; data: AppData; listIndex: readonly ListInfo[];
   onClose: () => void;
-  onSave: (name: string, color: string, folderId: string | null) => void;
-  onArchive?: () => void;
+  onSave: (name: string, color: string, folderId: string | null, parentListId: string | null) => Promise<boolean>;
+  onArchive?: () => Promise<boolean>; onDelete?: () => Promise<boolean>;
 }) {
   const editing = typeof value === "object";
+  const original = editing ? listIndex.find((list) => list.id === value.id) : undefined;
   const [name, setName] = useState(editing ? value.name : "");
   const [color, setColor] = useState(editing ? value.color : colors[0]);
   const [folderId, setFolder] = useState(editing ? value.folderId || "" : "");
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <form
-        className="dialog list-dialog"
-        onMouseDown={(e) => e.stopPropagation()}
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (name.trim()) onSave(name.trim(), color, folderId || null);
-        }}
-      >
-        <div className="dialog-header">
-          <h2>
-            {value === "folder"
-              ? "新建清单分组"
-              : editing
-                ? "编辑清单"
-                : "添加清单"}
-          </h2>
-          <IconButton label="关闭清单设置" onClick={onClose}>
-            <X size={18} />
-          </IconButton>
-        </div>
-        <label>
-          名称
-          <input
-            autoFocus
-            aria-label="清单名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={100}
-            placeholder={
-              value === "folder" ? "例如：工作相关、生活" : "例如：工作、生活、学习"
-            }
-            required
-          />
-        </label>
-        {value !== "folder" && (
-          <>
-            <div className="color-picker">
-              {colors.map((c) => (
-                <button
-                  type="button"
-                  key={c}
-                  aria-label={`颜色 ${c}`}
-                  aria-pressed={color.toLowerCase() === c}
-                  className={color.toLowerCase() === c ? "selected" : ""}
-                  style={{ background: c }}
-                  onClick={() => setColor(c)}
-                >
-                  {color.toLowerCase() === c && <Check size={14} strokeWidth={2.5} />}
-                </button>
-              ))}
-            </div>
-            <div className="field-group">
-              <span>清单分组（可选）</span>
-              <CustomSelect
-                ariaLabel="清单分组"
-                value={folderId}
-                options={[
-                  { value: "", label: "不分组" },
-                  ...data.folders.map((f) => ({ value: f.id, label: f.name })),
-                ]}
-                onChange={(val) => setFolder(String(val))}
-              />
-              <p className="field-help">分组用于在侧栏整理多个清单，不分组时直接显示清单。</p>
-            </div>
-          </>
-        )}
-        <div className="dialog-footer">
-          {onArchive && (
-            <button type="button" className="text-button" onClick={onArchive}>
-              <Archive size={14} />
-              归档
-            </button>
-          )}
-          <button type="button" className="text-button" onClick={onClose}>
-            取消
-          </button>
-          <button className="primary-button" type="submit">
-            保存
-          </button>
-        </div>
-      </form>
-    </div>
-  );
+  const [parent, setParent] = useState(original?.parentId || "");
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const subtree = original?.subtreeIds || [];
+  const height = original ? Math.max(1, ...listIndex.filter((list) => subtree.includes(list.id)).map((list) => list.path.length - original.path.length + 1)) : 1;
+  const parentInfo = listIndex.find((list) => list.id === parent);
+  const directChildren = editing ? listIndex.filter((list) => list.parentId === value.id).length : 0;
+  async function action(callback: () => Promise<boolean>) {
+    if (busy) return;
+    setBusy(true); setError("");
+    try { if (!await callback()) setError("清单尚未保存，输入已保留，请核对提示后重试。"); }
+    catch (cause) {setError(errorMessage(cause));}
+    finally {setBusy(false);}
+  }
+  return <div className="modal-backdrop" onMouseDown={() => {if (!busy) onClose();}}>
+    <form className="dialog list-dialog tag-dialog" aria-label="清单设置" onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => {event.preventDefault(); if (name.trim()) void action(() => onSave(name.trim(), color, parent ? null : folderId || null, parent || null));}}>
+      <div className="dialog-header"><h2>{value === "folder" ? "新建清单分组" : editing ? "编辑清单" : "添加清单"}</h2><IconButton label="关闭清单设置" onClick={onClose}><X size={18}/></IconButton></div>
+      <label>名称<input autoFocus aria-label="清单名称" value={name} onChange={(event) => setName(event.target.value)} maxLength={100} placeholder={value === "folder" ? "例如：工作相关、生活" : "例如：学校、数据结构"} required disabled={busy}/></label>
+      {value !== "folder" && <>
+        <div className="color-picker">{colors.map((item) => <button type="button" key={item} aria-label={`颜色 ${item}`} aria-pressed={color.toLowerCase() === item} className={color.toLowerCase() === item ? "selected" : ""} style={{background: item}} onClick={() => setColor(item)}>{color.toLowerCase() === item && <Check size={14} strokeWidth={2.5}/>}</button>)}</div>
+        <label>所属父清单<select aria-label="所属父清单" value={parent} disabled={busy} onChange={(event) => {setParent(event.target.value); if (event.target.value) setFolder("");}}>
+          <option value="">无 · 作为顶层清单</option>
+          {listIndex.filter((list) => list.id !== "inbox" && !subtree.includes(list.id) && !data.lists.find((item) => item.id === list.id)?.archived).map((list) => <option key={list.id} value={list.id} disabled={list.path.length + height > 3}>{list.path.join(" › ")}{list.path.length + height > 3 ? "（已达三层上限）" : ""}</option>)}
+        </select></label>
+        <div className="field-group"><span>清单分组（可选）</span><CustomSelect ariaLabel="清单分组" value={folderId} options={[{value: "", label: parent ? "跟随父清单" : "不分组"}, ...data.folders.map((folder) => ({value: folder.id, label: folder.name}))]} onChange={(value) => {setFolder(String(value)); if (value) setParent("");}}/><p className="field-help">子清单跟随父清单的分组；选择独立分组会将此清单移回顶层。</p></div>
+        <div className="tag-path-preview" aria-label="清单路径预览"><List size={15}/><span>{[...(parentInfo?.path || []), name || "新清单"].join(" › ")}</span></div>
+        {editing && <p className="tag-delete-hint">删除只移除此清单，当前清单的任务移入收集箱。{directChildren ? `${directChildren} 个直属子清单会提升一级；归档也只影响当前清单，子清单保持可见。` : "归档只影响当前清单。"}</p>}
+      </>}
+      {error && <p className="inline-error" role="alert">{error}</p>}
+      <div className="dialog-footer">{onDelete && <button type="button" className="text-button danger" disabled={busy} onClick={() => void action(onDelete)}><Trash2 size={14}/>删除清单</button>}{onArchive && <button type="button" className="text-button" disabled={busy} onClick={() => void action(onArchive)}><Archive size={14}/>归档</button>}<button type="button" className="text-button" disabled={busy} onClick={onClose}>取消</button><button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : "保存"}</button></div>
+    </form>
+  </div>;
 }
 
 function TagDialog({mode, initialName, initialParent, index, onClose, onSave, onDelete}: {
@@ -3200,7 +3221,7 @@ function SettingsDialog({
                     .filter((list) => !list.archived)
                     .map((list) => ({
                       value: list.id,
-                      label: list.name,
+                      label: listPath(displayListIndex(data, snapshot.listIndex), list.id),
                       color: list.color,
                     }))}
                   onChange={(val) =>

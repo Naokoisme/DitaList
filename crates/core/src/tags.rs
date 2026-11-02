@@ -345,6 +345,87 @@ fn register_hierarchy(data: &mut AppData) {
     );
 }
 
+pub(crate) fn move_tag(
+    data: &mut AppData,
+    id: &str,
+    target: &TagMoveTarget,
+    now: DateTime<Utc>,
+) -> Result<(String, BTreeMap<String, String>), CoreError> {
+    let known = known(data);
+    if !known.contains(id) {
+        return Err(CoreError::new("not_found", "标签不存在"));
+    }
+    let original_parent = data.settings.tag_parents.get(id).cloned();
+    let parent = match target {
+        TagMoveTarget::Root => None,
+        TagMoveTarget::Tag { tag_id, position } => {
+            if !["before", "inside", "after"].contains(&position.as_str()) {
+                return Err(validation::invalid("标签位置无效"));
+            }
+            if !known.contains(tag_id) {
+                return Err(CoreError::new("not_found", "目标标签不存在"));
+            }
+            if tag_id == id {
+                return Err(validation::invalid("标签不能拖到自身"));
+            }
+            if position == "inside" {
+                Some(tag_id.clone())
+            } else {
+                data.settings.tag_parents.get(tag_id).cloned()
+            }
+        }
+    };
+    let group = |parent: Option<&str>| {
+        parent
+            .map(|id| format!("tag:{id}"))
+            .unwrap_or_else(|| "tags".into())
+    };
+    let siblings = |parent: Option<&str>| {
+        let items: Vec<_> = known
+            .iter()
+            .filter(|id| data.settings.tag_parents.get(*id).map(String::as_str) == parent)
+            .map(|id| format!("tag:{id}"))
+            .collect();
+        crate::navigation::ordered(&items, &data.settings.navigation, &group(parent))
+    };
+    let source_group = group(original_parent.as_deref());
+    let destination_group = group(parent.as_deref());
+    let source_order = siblings(original_parent.as_deref());
+    let destination_order = siblings(parent.as_deref());
+    let label = name(id, &data.settings.tag_parents).to_owned();
+    let (new_id, mapping) = upsert(data, &label, parent.as_deref(), Some(id), now)?;
+    let new_key = format!("tag:{new_id}");
+    let mut destination: Vec<_> = destination_order
+        .iter()
+        .map(|key| rewrite_key(key, &mapping))
+        .filter(|key| key != &new_key)
+        .collect();
+    let position = match target {
+        TagMoveTarget::Tag { tag_id, position } if position != "inside" => {
+            destination
+                .iter()
+                .position(|key| *key == format!("tag:{tag_id}"))
+                .ok_or_else(|| CoreError::new("conflict", "目标标签导航已变化"))?
+                + usize::from(position == "after")
+        }
+        _ => destination.len(),
+    };
+    destination.insert(position, new_key.clone());
+    data.settings.navigation.orders.insert(
+        source_group,
+        source_order
+            .iter()
+            .map(|key| rewrite_key(key, &mapping))
+            .filter(|key| key != &new_key)
+            .collect(),
+    );
+    data.settings
+        .navigation
+        .orders
+        .insert(destination_group, destination);
+    Ok((new_id, mapping))
+}
+
 pub(crate) fn delete(data: &mut AppData, id: &str, now: DateTime<Utc>) -> BTreeSet<String> {
     let removed: BTreeSet<_> = index(data)
         .into_iter()

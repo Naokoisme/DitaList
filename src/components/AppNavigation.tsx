@@ -1,5 +1,5 @@
 import { useEffect, useState, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
-import type { TagInfo } from "../generated/contracts";
+import type { ListInfo, TagInfo } from "../generated/contracts";
 import {
   CalendarCheck2,
   CalendarDays,
@@ -28,6 +28,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { AppData, Folder as TaskFolder, Task, TaskList, ViewId, NavigationPreferences } from "../model";
 import { addDays, localDate } from "../core/domain";
+import { displayListIndex, listPath } from "../core/hierarchy";
 import type { ListMoveTarget } from "../core/list-organization";
 import {
   RAIL_NAV_ITEMS,
@@ -45,6 +46,11 @@ interface AppNavigationProps {
   active: Task[];
   tags: string[];
   tagIndex?: readonly TagInfo[];
+  listIndex?: readonly ListInfo[];
+  draggingTagId?: string | null;
+  tagRootDropProps?: HTMLAttributes<HTMLElement>;
+  tagRootHighlighted?: boolean;
+  revealHierarchy?: {kind: "tag" | "list"; id: string; nonce: number} | null;
   saveStatus: "saved" | "saving" | "error";
   saveStatusLabel: string;
   sidebarOpen: boolean;
@@ -78,6 +84,11 @@ export default function AppNavigation({
   active,
   tags,
   tagIndex,
+  listIndex,
+  draggingTagId,
+  tagRootDropProps,
+  tagRootHighlighted,
+  revealHierarchy,
   saveStatus,
   saveStatusLabel,
   sidebarOpen,
@@ -103,6 +114,8 @@ export default function AppNavigation({
   listGroupDropProps,
 }: AppNavigationProps) {
   const indexedTags: readonly TagInfo[] = tagIndex?.length ? tagIndex : tags.map((id) => ({id, name: id, parentId: null, path: [id], rootId: id, subtreeIds: [id]}));
+  const indexedLists = displayListIndex(data, listIndex);
+  const [expandedLists, setExpandedLists] = useState<Set<string>>(new Set());
   const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
   const selectedTag = view.startsWith("tag:") ? indexedTags.find((tag) => tag.id === view.slice(4)) : undefined;
   const ancestors = new Set<string>();
@@ -113,13 +126,27 @@ export default function AppNavigation({
     const parents: string[] = JSON.parse(ancestorKey);
     if (parents.length) setExpandedTags((previous) => parents.every((id) => previous.has(id)) ? previous : new Set([...previous, ...parents]));
   }, [view, ancestorKey]);
+  const selectedList = view.startsWith("list:") ? indexedLists.find((list) => list.id === view.slice(5)) : undefined;
+  const listAncestors = new Set<string>();
+  let listParent = selectedList?.parentId;
+  while (listParent && !listAncestors.has(listParent)) { listAncestors.add(listParent); listParent = indexedLists.find((list) => list.id === listParent)?.parentId; }
+  const listAncestorKey = JSON.stringify([...listAncestors]);
+  useEffect(() => {
+    const parents: string[] = JSON.parse(listAncestorKey);
+    if (parents.length) setExpandedLists((previous) => parents.every((id) => previous.has(id)) ? previous : new Set([...previous, ...parents]));
+  }, [view, listAncestorKey]);
+  useEffect(() => {
+    if (!revealHierarchy) return;
+    const setExpanded = revealHierarchy.kind === "tag" ? setExpandedTags : setExpandedLists;
+    setExpanded((previous) => new Set([...previous, revealHierarchy.id]));
+  }, [revealHierarchy]);
   const today = localDate();
   const fullView = ["calendar", "matrix", "focus", "habits"].includes(view);
   const lists = data.lists
     .filter((list) => list.id !== "inbox" && !list.archived)
     .sort((a, b) => a.sortOrder - b.sortOrder);
   const rootListEntries: RootListEntry[] = [
-    ...lists.filter((list) => !list.folderId).map((list) => ({ id: `list:${list.id}`, list })),
+    ...lists.filter((list) => !indexedLists.find((info) => info.id === list.id)?.parentId && !list.folderId).map((list) => ({ id: `list:${list.id}`, list })),
     ...data.folders.slice().sort((a, b) => a.sortOrder - b.sortOrder)
       .map((folder) => ({ id: `folder:${folder.id}`, folder })),
   ];
@@ -129,8 +156,9 @@ export default function AppNavigation({
     lists: rootListEntries.map((item) => item.id),
     tags: indexedTags.filter((tag) => !tag.parentId).map((tag) => `tag:${tag.id}`),
     ...Object.fromEntries(indexedTags.filter((tag) => indexedTags.some((child) => child.parentId === tag.id)).map((tag) => [`tag:${tag.id}`, indexedTags.filter((child) => child.parentId === tag.id).map((child) => `tag:${child.id}`)])),
+    ...Object.fromEntries(lists.map((list) => [`list:${list.id}`, lists.filter((child) => indexedLists.find((info) => info.id === child.id)?.parentId === list.id).map((child) => `list:${child.id}`)])),
     filters: data.filters.map((filter) => `filter:${filter.id}`),
-    ...Object.fromEntries(data.folders.map((folder) => [`folder:${folder.id}`, lists.filter((list) => list.folderId === folder.id).map((list) => `list:${list.id}`)])),
+    ...Object.fromEntries(data.folders.map((folder) => [`folder:${folder.id}`, lists.filter((list) => list.folderId === folder.id && !indexedLists.find((info) => info.id === list.id)?.parentId).map((list) => `list:${list.id}`)])),
   }, onSaveNavigation, onEditingChange);
   const preferences = edit.preferences;
   const visible = (id: string) => edit.editing || isNavigationItemVisible(preferences, id);
@@ -167,7 +195,8 @@ export default function AppNavigation({
         if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) { event.preventDefault(); edit.begin(); }
         if (edit.editing && event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
           event.preventDefault(); event.stopPropagation();
-          const peers = [...event.currentTarget.parentElement!.querySelectorAll<HTMLElement>("[data-navigation-id]")].filter((item) => item.dataset.navigationGroup === group);
+          const groupRoot = event.currentTarget.closest("[data-hierarchy-group]") || event.currentTarget.parentElement!;
+          const peers = [...groupRoot.querySelectorAll<HTMLElement>("[data-navigation-id]")].filter((item) => item.dataset.navigationGroup === group);
           const index = peers.findIndex((item) => item.dataset.navigationId === id);
           const other = peers[index + (event.key === "ArrowUp" ? -1 : 1)];
           if (other) edit.move(group, id, other.dataset.navigationId!, event.key === "ArrowDown");
@@ -211,61 +240,40 @@ export default function AppNavigation({
     ));
   };
 
+  const renderListNode = (list: TaskList, group: string): ReactNode => {
+    const info = indexedLists.find((entry) => entry.id === list.id);
+    const children = orderNavigationItems(lists.filter((child) => indexedLists.find((entry) => entry.id === child.id)?.parentId === list.id).map((child) => ({id: `list:${child.id}`, list: child})), preferences, `list:${list.id}`).filter((item) => visible(item.id));
+    const expanded = edit.editing || expandedLists.has(list.id);
+    return <div className="tag-tree-node" role="treeitem" aria-level={info?.path.length || 1} aria-expanded={children.length ? expanded : undefined} key={list.id}>
+      <div className="tag-tree-row">
+        {children.length ? <button type="button" className={`tag-tree-toggle ${expanded ? "is-expanded" : ""}`} aria-label={`${expanded ? "收起" : "展开"}清单 ${listPath(indexedLists, list.id)}`} aria-expanded={expanded} onClick={() => setExpandedLists((previous) => {const next = new Set(previous); if (next.has(list.id)) next.delete(list.id); else next.add(list.id); return next;})}><ChevronRight size={13}/></button> : <span className="tag-tree-spacer"/>}
+        {sortable(group, `list:${list.id}`, list.name, renderListItem(list))}
+      </div>
+      {children.length > 0 && expanded && <div className="tag-tree-children" role="group" data-hierarchy-group={`list:${list.id}`}>{children.map((child) => renderListNode(child.list, `list:${list.id}`))}</div>}
+    </div>;
+  };
   const renderLists = () => (
     <section className="navigation-section" key="section:lists" aria-label="清单">
-      <div
-        className={`sidebar-section-heading list-root-heading ${groupHighlighted(null) ? "list-group-drag-over" : ""}`}
-        {...listGroupDropProps(null)}
-      >
+      <div className={`sidebar-section-heading list-root-heading ${groupHighlighted(null) ? "list-group-drag-over" : ""}`} {...listGroupDropProps(null)}>
         <span>{draggingListId ? "清单 · 不分组" : "清单"}</span>
-        <div>
-          <button type="button" title="新建清单分组" aria-label="新建清单分组" onClick={onAddFolder}>
-            <FolderPlus size={14} />
-          </button>
-          <button type="button" title="添加清单" aria-label="添加清单" onClick={onAddList}>
-            <Plus size={15} />
-          </button>
-        </div>
+        <div><button type="button" title="新建清单分组" aria-label="新建清单分组" onClick={onAddFolder}><FolderPlus size={14}/></button><button type="button" title="添加清单" aria-label="添加清单" onClick={onAddList}><Plus size={15}/></button></div>
       </div>
+      <div className="list-tree tag-tree" role="tree" aria-label="清单层级" data-hierarchy-group="lists">
       {rootLists.map((entry) => {
-        if (entry.list) return sortable("lists", entry.id, entry.list.name, renderListItem(entry.list));
+        if (entry.list) return renderListNode(entry.list, "lists");
         const folder = entry.folder!;
-        const folderLists = lists.filter((list) => list.folderId === folder.id);
-        const children = orderNavigationItems(
-          folderLists.map((list) => ({ id: `list:${list.id}`, list })),
-          preferences, `folder:${folder.id}`,
-        ).filter((item) => visible(item.id));
-        return sortable("lists", entry.id, folder.name, (
-          <details className="sidebar-folder" key={entry.id} open>
-            <summary
-              className={`${draggingListId ? "list-group-drop-candidate" : ""} ${groupHighlighted(folder.id) ? "list-group-drag-over" : ""}`}
-              title="可将清单拖到这里归入分组"
-              {...listGroupDropProps(folder.id)}
-            >
-              <ChevronRight size={12} />
-              <Folder size={16} />
-              <span>{folder.name}</span>
-              {groupHighlighted(folder.id) && <small>移入</small>}
-            </summary>
-            {children.map((item) => sortable(`folder:${folder.id}`, item.id, item.list.name, renderListItem(item.list)))}
-            {folderLists.length > 0 && children.length === 0 && hiddenNotice("分组内的清单")}
-          </details>
-        ));
+        const folderLists = lists.filter((list) => list.folderId === folder.id && !indexedLists.find((info) => info.id === list.id)?.parentId);
+        const children = orderNavigationItems(folderLists.map((list) => ({id: `list:${list.id}`, list})), preferences, `folder:${folder.id}`).filter((item) => visible(item.id));
+        return sortable("lists", entry.id, folder.name, <details className="sidebar-folder" key={entry.id} open>
+          <summary className={`${draggingListId ? "list-group-drop-candidate" : ""} ${groupHighlighted(folder.id) ? "list-group-drag-over" : ""}`} title="拖到这里移回分组顶层" {...listGroupDropProps(folder.id)}><ChevronRight size={12}/><Folder size={16}/><span>{folder.name}</span>{groupHighlighted(folder.id) && <small>移入</small>}</summary>
+          <div data-hierarchy-group={`folder:${folder.id}`}>{children.map((item) => renderListNode(item.list, `folder:${folder.id}`))}</div>
+          {folderLists.length > 0 && children.length === 0 && hiddenNotice("分组内的清单")}
+        </details>);
       })}
-      {draggingListId && (
-        <div
-          className={`list-root-drop ${groupHighlighted(null) ? "list-group-drag-over" : ""}`}
-          {...listGroupDropProps(null)}
-        >
-          放到清单顶层（不分组）
-        </div>
-      )}
+      </div>
+      {draggingListId && <div className={`list-root-drop ${groupHighlighted(null) ? "list-group-drag-over" : ""}`} aria-label="清单顶层落点" {...listGroupDropProps(null)}>放到清单顶层（不分组）</div>}
       {rootListEntries.length > 0 && rootLists.length === 0 && hiddenNotice("清单与分组")}
-      {lists.length === 0 && (rootListEntries.length === 0 || rootLists.length > 0) && (
-        <button type="button" className="sidebar-empty-add" onClick={onAddList}>
-          <Plus size={13} />添加你的第一个清单
-        </button>
-      )}
+      {lists.length === 0 && <button type="button" className="sidebar-empty-add" onClick={onAddList}><Plus size={13}/>添加你的第一个清单</button>}
     </section>
   );
   const renderTagGroup = (parent: string | null): ReactNode => {
@@ -280,19 +288,20 @@ export default function AppNavigation({
             onClick={() => setExpandedTags((previous) => { const next = new Set(previous); if (next.has(tag.id)) next.delete(tag.id); else next.add(tag.id); return next; })}><ChevronRight size={13}/></button> : <span className="tag-tree-spacer"/>}
           {sortable(group, id, tag.name, renderTagItem(tag.id))}
         </div>
-        {children.length > 0 && expanded && <div className="tag-tree-children" role="group">{renderTagGroup(tag.id)}</div>}
+        {children.length > 0 && expanded && <div className="tag-tree-children" role="group" data-hierarchy-group={`tag:${tag.id}`}>{renderTagGroup(tag.id)}</div>}
       </div>;
     });
   };
   const renderTags = () => (
     <section className="navigation-section" key="section:tags" aria-label="标签">
-      <div className="sidebar-section-heading">
-        <span>标签</span>
+      <div className={`sidebar-section-heading ${tagRootHighlighted ? "list-group-drag-over" : ""}`} {...tagRootDropProps}>
+        <span>{draggingTagId ? "标签 · 顶层" : "标签"}</span>
         <button type="button" title="添加标签" aria-label="新建标签" onClick={onAddTag}>
           <Plus size={14} />
         </button>
       </div>
-      <div className="tag-tree" role="tree" aria-label="标签层级">{renderTagGroup(null)}</div>
+      <div className="tag-tree" role="tree" aria-label="标签层级" data-hierarchy-group="tags">{renderTagGroup(null)}</div>
+      {draggingTagId && <div className={`list-root-drop ${tagRootHighlighted ? "list-group-drag-over" : ""}`} aria-label="标签顶层落点" {...tagRootDropProps}>放到标签顶层</div>}
       {tags.length > 0 && visibleTags.length === 0 && hiddenNotice("标签")}
       {tags.length === 0 && (
         <button type="button" className="sidebar-empty-add" onClick={onAddTag}>

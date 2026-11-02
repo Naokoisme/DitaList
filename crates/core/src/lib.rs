@@ -2,6 +2,7 @@
 mod domain;
 mod focus;
 mod import;
+mod lists;
 mod navigation;
 mod reminders;
 mod service;

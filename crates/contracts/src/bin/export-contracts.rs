@@ -16,6 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         FocusSession,
         NavigationPreferences,
         TagInfo,
+        ListInfo,
         Settings,
         AppData,
         Preferences,
@@ -29,7 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Operation,
         QuickDraft,
         McpInfo,
-        ListMoveTarget
+        ListMoveTarget,
+        TagMoveTarget
     );
     std::fs::create_dir_all(root.join("src/generated"))?;
     std::fs::write(root.join("src/generated/contracts.ts"), output)?;

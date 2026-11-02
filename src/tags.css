@@ -35,3 +35,12 @@
 .tag-path-preview { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; padding: 10px; border-radius: 5px; color: var(--accent-ink); background: var(--soft); font-size: 13px; overflow-wrap: anywhere; }
 .tag-path-preview > small { color: var(--muted); font-size: 11px; margin-left: auto; }
 .tag-dialog-hint, .tag-delete-hint { color: var(--muted); font-size: 12px; line-height: 1.6; margin: 9px 0; }
+.tag-tree .sidebar-item[draggable="true"] { cursor: grab; }
+.tag-tree .sidebar-item[draggable="true"]:active { cursor: grabbing; }
+.sidebar-list-item.list-drop-inside > .sidebar-item { color: var(--accent-ink); background: var(--soft); outline: 1px solid var(--accent); outline-offset: -1px; }
+.hierarchy-drop-label { position: absolute; right: 7px; top: 9px; padding: 1px 4px; color: var(--accent-ink); background: var(--soft); border-radius: 3px; font-size: 10px; pointer-events: none; }
+.sidebar-list-item.hierarchy-drop-invalid > .sidebar-item { outline: 1px dashed var(--muted); outline-offset: -1px; opacity: .55; }
+.hierarchy-drop-invalid > .hierarchy-drop-label { color: var(--muted); background: var(--bg); }
+.sidebar-list-item[data-drop-position] .list-edit-button, .sidebar-list-item[data-drop-position] .tag-child-add { opacity: 0; pointer-events: none; }
+.list-tree .sidebar-folder { margin-left: 3px; }
+.list-tree .sidebar-folder > div { margin-left: 5px; }
