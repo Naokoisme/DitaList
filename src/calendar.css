@@ -206,10 +206,14 @@
 }
 .cal-title-picker-button h1 {
   margin: 0;
+  /* 为四位年份和两位月份预留宽度，保持右侧导航按钮的位置。 */
+  min-width: calc(6ch + 2em + 1px);
   font-size: 19px;
   line-height: 27px;
   white-space: nowrap;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
 }
 .cal-title-picker-button > svg {
   color: var(--muted, #999);
