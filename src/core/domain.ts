@@ -185,8 +185,9 @@ const appSchema = z.object({
     floatingDefaultListId: idSchema.default("inbox"),
     floatingDefaultDate: z.enum(["none", "today", "tomorrow"]).default("today"),
     customTags: z.array(z.string().trim().min(1).max(200)).max(500).default([]),
+    tagParents: z.record(z.string(), z.string()).default({}),
     navigation: z.object({
-      orders: z.record(z.string().min(1).max(200), z.array(z.string().min(1).max(240)).max(20000))
+      orders: z.record(z.string().min(1).max(240), z.array(z.string().min(1).max(240)).max(20000))
         .refine((orders) => Object.keys(orders).length <= 10005, "导航分组过多").default({}),
       hidden: z.array(z.string().min(1).max(240)).max(50000).default([]),
     }).default({orders: {}, hidden: []}),
@@ -271,6 +272,7 @@ export function createEmptyData(): AppData {
       floatingDefaultListId: "inbox",
       floatingDefaultDate: "today",
       customTags: [],
+      tagParents: {},
       navigation: {orders: {}, hidden: []},
     },
   };
@@ -427,7 +429,7 @@ export function parseQuickInput(
     listId: defaultListId,
   };
   const tags: string[] = [];
-  title = title.replace(/(?:^|\s)#([\p{L}\p{N}_-]+)/gu, (_, tag: string) => {
+  title = title.replace(/(?:^|\s)#([\p{L}\p{N}_-]+(?:\/[\p{L}\p{N}_-]+)*)/gu, (_, tag: string) => {
     tags.push(tag);
     return " ";
   });

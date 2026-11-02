@@ -71,10 +71,12 @@ import {
   localDate,
   parseQuickInput,
 } from "./core/domain";
-import { desktopAction, desktopStatus, errorMessage, executeOperation, exportBackup, getSnapshot, importBackup, watchCore, watchNavigation, type Snapshot } from "./core/client";
+import { desktopAction, desktopStatus, errorMessage, executeOperation, exportBackup, getSnapshot, importBackup, isRejectedTagUpsert, watchCore, watchNavigation, type Snapshot } from "./core/client";
 import { installMainWindowState } from "./desktop/mainWindow";
 import { listen } from "@tauri-apps/api/event";
-import type { CommandReceipt, Operation } from "./generated/contracts";
+import type { CommandReceipt, Operation, TagInfo } from "./generated/contracts";
+import { compactTaskTags, displayTagIndex, tagName, tagPath, taskHasTag, taskMatchesTagSearch } from "./core/tags";
+import TagPicker from "./components/TagPicker";
 import AgentReviewPanel from "./components/AgentReviewPanel";
 import McpSettings from "./components/McpSettings";
 import AppNavigation from "./components/AppNavigation";
@@ -87,6 +89,7 @@ import CalendarView from "./components/CalendarView";
 import TaskDateHint from "./components/TaskDateHint";
 import { FocusView, HabitsView, MatrixView } from "./components/Tools";
 import "./calendar.css";
+import "./tags.css";
 
 const saveStatusLabels = {
   saved: "已保存到本机",
@@ -230,12 +233,12 @@ function dateText(date: string | null) {
     day: "numeric",
   });
 }
-function matchesQuery(task: Task, query: string) {
+function matchesQuery(task: Task, query: string, tagIndex: readonly TagInfo[] = []) {
   const terms = query.toLowerCase().trim().split(/\s+/).filter(Boolean);
   return terms.every((term) => {
     if (term === "#" || !term) return true;
     if (term.startsWith("#"))
-      return task.tags.some((t) => t.toLowerCase().includes(term.slice(1)));
+      return tagIndex.length ? taskMatchesTagSearch(task, term.slice(1), tagIndex) : task.tags.some((t) => t.toLowerCase().includes(term.slice(1)));
     if (["!1", "!2", "!3", "!0"].includes(term))
       return task.priority === Number(term.slice(1));
     if (term === "今天") return task.dueDate === localDate();
@@ -277,6 +280,7 @@ export default function App() {
   const [tagDialog, setTagDialog] = useState<{
     mode: "create" | "edit";
     name: string;
+    parent?: string;
   } | null>(null);
   const [filterDialog, setFilterDialog] = useState(false);
   const [context, setContext] = useState<{
@@ -331,6 +335,7 @@ export default function App() {
     // A later successful edit of the same fields supersedes their earlier failed draft.
     const key = operation.type === "taskUpdate"
       ? `${operation.type}:${operation.id}:${Object.keys(operation.patch || {}).sort().join(",")}`
+      : operation.type === "tagUpsert" && operation.original ? `tagUpsert:${operation.original}`
       : operation.type === "settingsUpdate" || operation.type === "preferencesUpdate"
         ? `${operation.type}:${Object.keys(operation.patch || {}).sort().join(",")}`
         : operation.type === "navigationUpdate" && Object.keys(operation.renames).length === 0
@@ -350,9 +355,9 @@ export default function App() {
       catch (error) { setToast(`已保存，但刷新界面失败：${errorMessage(error)}`); }
       return receipt;
     } catch (error) {
-      failedWrites.current.set(key, operation);
+      if (!isRejectedTagUpsert(operation, error)) failedWrites.current.set(key, operation);
       setFailedWriteCount(failedWrites.current.size);
-      setSaveStatus("error");
+      setSaveStatus(failedWrites.current.size ? "error" : "saved");
       setToast(errorMessage(error));
       return null;
     }
@@ -550,6 +555,7 @@ export default function App() {
     return () => window.removeEventListener("keydown", key);
   }, [go, openNewTask]);
   const selected = data?.tasks.find((t) => t.id === selectedId) || null;
+  const tagIndex = useMemo(() => displayTagIndex(data, snapshot?.tagIndex), [data, snapshot?.tagIndex]);
   const active =
     data?.tasks.filter((t) => !t.deletedAt && !t.completedAt && t.agentStatus !== "pending") || [];
   const tags = useMemo(
@@ -566,7 +572,7 @@ export default function App() {
   const title = view.startsWith("list:")
     ? data?.lists.find((l) => l.id === view.slice(5))?.name || "清单"
     : view.startsWith("tag:")
-      ? view.slice(4)
+      ? tagPath(tagIndex, view.slice(4))
       : view.startsWith("filter:")
         ? data?.filters.find((f) => f.id === view.slice(7))?.name || "过滤器"
         : labels[view] || "任务";
@@ -591,12 +597,13 @@ export default function App() {
     else if (view.startsWith("list:"))
       tasks = tasks.filter((t) => t.listId === view.slice(5));
     else if (view.startsWith("tag:"))
-      tasks = tasks.filter((t) => t.tags.includes(view.slice(4)));
+      tasks = tasks.filter((t) => taskHasTag(t, view.slice(4), tagIndex));
     else if (view.startsWith("filter:"))
       tasks = tasks.filter((t) =>
         matchesQuery(
           t,
           data.filters.find((f) => f.id === view.slice(7))?.query || "",
+          tagIndex,
         ),
       );
     if (view !== "trash") tasks = tasks.filter((task) => matchesTaskViewFilter(task, taskFilter));
@@ -612,7 +619,7 @@ export default function App() {
               : a.sortOrder - b.sortOrder) ||
         a.createdAt.localeCompare(b.createdAt),
     );
-  }, [data, view, sort, taskFilter]);
+  }, [data, view, sort, taskFilter, tagIndex]);
   const openTasks = visibleTasks.filter(
     (t) => !t.completedAt || view === "trash",
   );
@@ -947,7 +954,7 @@ export default function App() {
   const tagItem = (t: string) => {
     const navId: ViewId = `tag:${t}`;
     const isDropCandidate = view !== navId && hasDropHintTask;
-    const count = active.filter((x) => x.tags.includes(t)).length;
+    const count = active.filter((x) => taskHasTag(x, t, tagIndex)).length;
     return (
       <div
         key={t}
@@ -972,13 +979,13 @@ export default function App() {
       >
         <button
           className={`sidebar-item ${view === navId ? "selected" : ""} ${isDropCandidate ? "drop-candidate" : ""} ${dragOverNav === navId ? "drag-over" : ""}`}
-          title={`可将任务拖动到标签 #${t}，双击、右键或点击右侧按钮可重命名或删除`}
+          title={`${tagPath(tagIndex, t)} · 包含全部下级标签的任务`}
           onClick={() => go(navId)}
           onDoubleClick={() => setTagDialog({ mode: "edit", name: t })}
           data-nav-id={navId}
         >
           <Hash size={17} />
-          <span>{t}</span>
+          <span>{tagName(tagIndex, t)}</span>
           {!!count && <small>{count}</small>}
         </button>
         <button
@@ -989,6 +996,7 @@ export default function App() {
         >
           <MoreHorizontal size={14} />
         </button>
+        {(tagIndex.find((tag) => tag.id === t)?.path.length || 1) < 3 && <button type="button" className="tag-child-add" aria-label={`在${tagPath(tagIndex, t)}下新建子标签`} title="添加子标签" onClick={() => setTagDialog({mode: "create", name: "", parent: t})}><Plus size={13}/></button>}
       </div>
     );
   };
@@ -998,6 +1006,7 @@ export default function App() {
       key={`${selected.id}:${detailReset}`}
       task={selected}
       data={data}
+      tagIndex={tagIndex}
       onPatch={(patch) => patchTask(selected.id, patch)}
       onToggle={() => toggle(selected.id)}
       onClose={() => setSelectedId(null)}
@@ -1022,6 +1031,7 @@ export default function App() {
         view={view}
         active={active}
         tags={tags}
+        tagIndex={tagIndex}
         saveStatus={saveStatus}
         saveStatusLabel={saveStatusLabels[saveStatus]}
         sidebarOpen={sidebarOpen}
@@ -1220,6 +1230,7 @@ export default function App() {
                     <TaskRow
                       key={t.id}
                       task={t}
+                      tagIndex={tagIndex}
                       list={data.lists.find((l) => l.id === t.listId)}
                       selected={selectedId === t.id}
                       dragging={draggingTaskId === t.id}
@@ -1321,6 +1332,7 @@ export default function App() {
                         <TaskRow
                           key={t.id}
                           task={t}
+                      tagIndex={tagIndex}
                           list={data.lists.find((l) => l.id === t.listId)}
                           selected={selectedId === t.id}
                           dragging={draggingTaskId === t.id}
@@ -1487,26 +1499,25 @@ export default function App() {
         />
       )}
       {tagDialog && (
-        <TagDialog mode={tagDialog.mode} initialName={tagDialog.name} onClose={() => setTagDialog(null)}
-          onSave={async (rawName) => {
-            const name = rawName.trim().replace(/^#+/, "").trim();
-            if (!name) return;
-            const operation: Operation = tagDialog.mode === "create"
-              ? {type: "settingsUpdate", patch: {customTags: [...new Set([...(data.settings.customTags || []), name])]}}
-              : {type: "tagRename", from: tagDialog.name, to: name};
-            if (await perform(operation)) {
-              if (tagDialog.mode === "edit" && tagDialog.name !== name) setTaskFilters((filters) => {
-                const next = {...filters};
-                if (next[`tag:${tagDialog.name}`]) next[`tag:${name}`] = next[`tag:${tagDialog.name}`];
-                delete next[`tag:${tagDialog.name}`]; return next;
-              });
-              setTagDialog(null); go(`tag:${name}`);
-            }
+        <TagDialog key={`${tagDialog.mode}:${tagDialog.name}:${tagDialog.parent || ""}`} mode={tagDialog.mode} initialName={tagDialog.name} initialParent={tagDialog.parent || null} index={tagIndex} onClose={() => setTagDialog(null)}
+          onSave={async (name, parent) => {
+            const receipt = await perform({type: "tagUpsert", name, parent, original: tagDialog.mode === "edit" ? tagDialog.name : null});
+            if (!receipt) return false;
+            const result = receipt.result as {id?: string};
+            const id = result.id;
+            if (!id) { setToast("标签已保存，请重新打开标签列表。"); setTagDialog(null); return true; }
+            if (tagDialog.mode === "edit" && tagDialog.name !== id) setTaskFilters((filters) => {
+              const next = {...filters};
+              if (next[`tag:${tagDialog.name}`]) next[`tag:${id}`] = next[`tag:${tagDialog.name}`];
+              delete next[`tag:${tagDialog.name}`]; return next;
+            });
+            setTagDialog(null); go(`tag:${id}`); return true;
           }}
           onDelete={tagDialog.mode === "edit" ? async () => {
-            if (await perform({type: "tagDelete", name: tagDialog.name})) {
-              setTagDialog(null); if (view === `tag:${tagDialog.name}`) go("all");
-            }
+            if (!await perform({type: "tagDelete", name: tagDialog.name})) return false;
+            const removed = tagIndex.find((tag) => tag.id === tagDialog.name)?.subtreeIds || [tagDialog.name];
+            setTagDialog(null); if (view.startsWith("tag:") && removed.includes(view.slice(4))) go("all");
+            return true;
           } : undefined}
         />
       )}
@@ -1541,7 +1552,7 @@ export default function App() {
             <div className="search-results">
               {search.trim() ? (
                 data.tasks
-                  .filter((t) => !t.deletedAt && t.agentStatus !== "pending" && matchesQuery(t, search))
+                  .filter((t) => !t.deletedAt && t.agentStatus !== "pending" && matchesQuery(t, search, tagIndex))
                   .slice(0, 100)
                   .map((t) => (
                     <button
@@ -1581,7 +1592,7 @@ export default function App() {
               )}
               {search.trim() &&
                 !data.tasks.some(
-                  (t) => !t.deletedAt && t.agentStatus !== "pending" && matchesQuery(t, search),
+                  (t) => !t.deletedAt && t.agentStatus !== "pending" && matchesQuery(t, search, tagIndex),
                 ) && <p>没有找到相关任务</p>}
             </div>
           </div>
@@ -1761,6 +1772,7 @@ function TaskRow({
   selected,
   dragging,
   showList,
+  tagIndex,
   onSelect,
   onDragStartTask,
   onDragEndTask,
@@ -1774,6 +1786,7 @@ function TaskRow({
   selected: boolean;
   dragging?: boolean;
   showList?: boolean;
+  tagIndex: readonly TagInfo[];
   onSelect: () => void;
   onDragStartTask?: () => void;
   onDragEndTask?: () => void;
@@ -1852,9 +1865,9 @@ function TaskRow({
         {task.pinned && <Pin size={12} className="muted" />}
       </div>
       <div className="task-row-meta">
-        {task.tags.slice(0, 2).map((t) => (
-          <span className="row-tag" key={t}>
-            #{t}
+        {compactTaskTags(task.tags, tagIndex).slice(0, 2).map((tag) => (
+          <span className="row-tag" key={tag.id} title={tag.paths.join("\n")}>
+            #{tag.name}
           </span>
         ))}
         {showList && list && (
@@ -1882,6 +1895,7 @@ function TaskRow({
 function TaskDetail({
   task,
   data,
+  tagIndex,
   onPatch,
   onToggle,
   onClose,
@@ -1894,6 +1908,7 @@ function TaskDetail({
 }: {
   task: Task;
   data: AppData;
+  tagIndex: readonly TagInfo[];
   onPatch: (patch: Partial<Task>) => Promise<CommandReceipt | null>;
   onToggle: () => void;
   onClose: () => void;
@@ -2052,37 +2067,14 @@ function TaskDetail({
           </form>
         </div>
         <div className="detail-tags">
-          {draftTags.map((t) => (
-            <span key={t}>
-              #{t}
-              <button
-                title={`移除标签 ${t}`}
-                onClick={() =>
-                  editTags(collectionDraft.current.tags.filter((x) => x !== t))
-                }
-              >
-                <X size={10} />
-              </button>
-            </span>
-          ))}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              const t = tag.trim().replace(/^#+/, "");
-              if (t && !collectionDraft.current.tags.includes(t))
-                editTags([...collectionDraft.current.tags, t]);
-              setTag("");
-            }}
-          >
-            <Tag size={13} />
-            <input
-              aria-label="添加标签"
-              maxLength={200}
-              placeholder="添加标签"
-              value={tag}
-              onChange={(e) => setTag(e.target.value)}
-            />
-          </form>
+          {draftTags.map((id) => {
+            const path = tagIndex.find((tag) => tag.id === id)?.path || [id];
+            return <span key={id} className="detail-tag-path" title={tagPath(tagIndex, id)}>
+              <Hash size={12}/><span className="tag-breadcrumb">{path.map((name, depth) => <span key={depth}>{depth > 0 && <ChevronRight size={11}/>}<span>{name}</span></span>)}</span>
+              <button type="button" aria-label={`移除标签 ${tagPath(tagIndex, id)}`} title={`移除标签 ${tagPath(tagIndex, id)}`} onClick={() => editTags(collectionDraft.current.tags.filter((tag) => tag !== id))}><X size={10}/></button>
+            </span>;
+          })}
+          <TagPicker index={tagIndex} selected={draftTags} value={tag} onChange={setTag} onAdd={(id) => editTags([...collectionDraft.current.tags, id])}/>
         </div>
         <div className="detail-settings-row">
           <RotateCcw size={15} />
@@ -2884,70 +2876,48 @@ function ListDialog({
   );
 }
 
-function TagDialog({
-  mode,
-  initialName,
-  onClose,
-  onSave,
-  onDelete,
-}: {
-  mode: "create" | "edit";
-  initialName: string;
-  onClose: () => void;
-  onSave: (name: string) => void;
-  onDelete?: () => void;
+function TagDialog({mode, initialName, initialParent, index, onClose, onSave, onDelete}: {
+  mode: "create" | "edit"; initialName: string; initialParent: string | null; index: readonly TagInfo[];
+  onClose: () => void; onSave: (name: string, parent: string | null) => Promise<boolean>; onDelete?: () => Promise<boolean>;
 }) {
-  const [name, setName] = useState(initialName);
-  return (
-    <div className="modal-backdrop" onMouseDown={onClose}>
-      <form
-        className="dialog"
-        onMouseDown={(e) => e.stopPropagation()}
-        onSubmit={(e) => {
-          e.preventDefault();
-          const clean = name.trim().replace(/^#+/, "").trim();
-          if (clean) onSave(clean);
-        }}
-      >
-        <div className="dialog-header">
-          <h2>{mode === "create" ? "添加标签" : "编辑标签"}</h2>
-          <IconButton label="关闭标签设置" onClick={onClose}>
-            <X size={18} />
-          </IconButton>
-        </div>
-        <label>
-          标签名称
-          <input
-            autoFocus
-            aria-label="标签名称"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            maxLength={100}
-            placeholder="例如：工作、读书、紧急（无需输入 #）"
-            required
-          />
-        </label>
-        <div className="dialog-footer">
-          {onDelete && (
-            <button
-              type="button"
-              className="text-button danger"
-              onClick={onDelete}
-            >
-              <Trash2 size={14} />
-              删除标签
-            </button>
-          )}
-          <button type="button" className="text-button" onClick={onClose}>
-            取消
-          </button>
-          <button className="primary-button" type="submit">
-            {mode === "create" ? "添加" : "保存"}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
+  const original = mode === "edit" ? index.find((tag) => tag.id === initialName) : undefined;
+  const [name, setName] = useState(original?.name || initialName);
+  const [parent, setParent] = useState(original?.parentId || initialParent || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const subtree = original?.subtreeIds || [];
+  const height = original ? Math.max(...index.filter((tag) => subtree.includes(tag.id)).map((tag) => tag.path.length - original.path.length + 1), 1) : 1;
+  const chosenParent = index.find((tag) => tag.id === parent);
+  const preview = [...(chosenParent?.path || []), name.trim() || "新标签"];
+  const children = Math.max(0, subtree.length - 1);
+  async function save() {
+    if (busy) return;
+    const clean = name.trim().replace(/^#+/, "").trim();
+    if (!clean) return;
+    setBusy(true); setError("");
+    try { if (!await onSave(clean, parent || null)) setError("保存失败，输入已保留。请核对提示中的名称、层级或保存问题后重试。"); }
+    catch (failure) { setError(errorMessage(failure)); }
+    finally { setBusy(false); }
+  }
+  return <div className="modal-backdrop" onMouseDown={() => { if (!busy) onClose(); }}>
+    <form className="dialog tag-dialog" aria-label={mode === "create" ? "添加标签" : "编辑标签"} onMouseDown={(event) => event.stopPropagation()} onSubmit={(event) => { event.preventDefault(); void save(); }}>
+      <div className="dialog-header"><h2>{mode === "create" ? parent ? "添加子标签" : "添加标签" : "编辑标签"}</h2><IconButton label="关闭标签设置" onClick={onClose}><X size={18}/></IconButton></div>
+      <label>标签名称<input autoFocus aria-label="标签名称" value={name} onChange={(event) => setName(event.target.value)} maxLength={200} placeholder="例如：学校、数据结构、作业" required disabled={busy}/></label>
+      <label>所属标签<select aria-label="所属标签" value={parent} onChange={(event) => setParent(event.target.value)} disabled={busy}>
+        <option value="">无 · 作为主标签</option>
+        {index.filter((tag) => !subtree.includes(tag.id)).map((tag) => <option key={tag.id} value={tag.id} disabled={tag.path.length + height > 3}>{tag.path.join(" › ")}{tag.path.length + height > 3 ? "（已达三层上限）" : ""}</option>)}
+      </select></label>
+      <div className="tag-path-preview" aria-label="标签路径预览"><Hash size={15}/><span>{preview.join(" › ")}</span><small>第 {preview.length} 层 / 共 3 层</small></div>
+      <p className="tag-dialog-hint">子标签收纳在所属标签下，点击上级标签可查看全部下级任务。</p>
+      {mode === "edit" && <p className="tag-delete-hint">删除将移除此标签{children ? `及 ${children} 个子标签` : ""}与任务的关联，任务会保留。</p>}
+      {error && <p className="inline-error" role="alert">{error}</p>}
+      <div className="dialog-footer">
+        {onDelete && <button type="button" className="text-button danger" disabled={busy} onClick={async () => { if (busy) return; setBusy(true); setError(""); try { if (!await onDelete()) setError("删除失败，标签已保留，请重试。"); } catch (failure) {setError(errorMessage(failure));} finally {setBusy(false);} }}><Trash2 size={14}/>删除标签</button>}
+        <button type="button" className="text-button" onClick={onClose} disabled={busy}>取消</button>
+        <button className="primary-button" type="submit" disabled={busy}>{busy ? "正在保存…" : mode === "create" ? "添加" : "保存"}</button>
+      </div>
+    </form>
+  </div>;
 }
 
 function FilterDialog({

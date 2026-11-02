@@ -445,6 +445,36 @@
             "name": {
               "type": "string"
             },
+            "original": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "parent": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "type": {
+              "type": "string",
+              "const": "tagUpsert"
+            }
+          },
+          "required": [
+            "type",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
             "type": {
               "type": "string",
               "const": "tagDelete"

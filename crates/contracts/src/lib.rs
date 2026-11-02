@@ -29,12 +29,14 @@ pub struct SavedFilter { pub id: String, pub name: String, pub query: String, pu
 pub struct FocusSession { pub id: String, pub task_id: Option<String>, pub title: String, pub started_at: String, pub ended_at: String, pub duration_seconds: u32, pub completed: bool }
 #[derive(Default)]
 pub struct NavigationPreferences { #[serde(default)] pub orders: BTreeMap<String, Vec<String>>, #[serde(default)] pub hidden: Vec<String> }
+pub struct TagInfo { pub id: String, pub name: String, pub parent_id: Option<String>, pub path: Vec<String>, pub root_id: String, pub subtree_ids: Vec<String> }
 pub struct Settings {
     pub theme: String, pub accent: String, pub week_start: u8, pub show_completed: bool, pub calendar_mode: String,
     pub sidebar_collapsed: bool, pub default_view: String, pub pomodoro_minutes: u32, pub break_minutes: u32,
     pub sound: bool, pub notifications: bool, pub floating_shortcut: String,
     pub floating_default_list_id: String, pub floating_default_date: String,
     #[serde(default)] pub custom_tags: Vec<String>,
+    #[serde(default)] pub tag_parents: BTreeMap<String, String>,
     #[serde(default)] pub navigation: NavigationPreferences,
 }
 pub struct AppData { pub schema_version: u8, pub tasks: Vec<Task>, pub lists: Vec<TaskList>, pub folders: Vec<Folder>, pub habits: Vec<Habit>, pub filters: Vec<SavedFilter>, pub focus_sessions: Vec<FocusSession>, pub settings: Settings }
@@ -47,6 +49,7 @@ pub struct CoreSnapshot {
     #[ts(type = "Record<string, number>")] pub entity_versions: BTreeMap<String,u64>,
     pub approvals: Vec<Approval>, pub reminders: Vec<ReminderEvent>, pub focus: FocusState,
     pub preferences: Preferences, pub today_count: u32, pub pending_count: u32, pub reminder_count: u32,
+    #[serde(default)] pub tag_index: Vec<TagInfo>,
 }
 pub struct CoreCommand { pub request_id: String, pub operation: Operation }
 pub struct CommandReceipt { pub request_id: String, pub status: String, #[ts(type = "number")] pub revision: u64, pub result: Value, pub created_at: String }
@@ -134,6 +137,13 @@ pub enum Operation {
     TagRename {
         from: String,
         to: String,
+    },
+    TagUpsert {
+        name: String,
+        #[serde(default)]
+        parent: Option<String>,
+        #[serde(default)]
+        original: Option<String>,
     },
     TagDelete {
         name: String,

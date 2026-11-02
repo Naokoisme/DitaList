@@ -485,19 +485,42 @@ pub fn dispatch(core: &CoreService, method: &str, params: Value) -> Result<Value
                 .get("includeDeleted")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let tag_ids = params
+                .get("tag")
+                .filter(|value| !value.is_null())
+                .map(|value| {
+                    let id = value
+                        .as_str()
+                        .ok_or_else(|| failure("invalid", "tag 必须是标签完整键"))?;
+                    snapshot
+                        .tag_index
+                        .iter()
+                        .find(|tag| tag.id == id)
+                        .map(|tag| {
+                            tag.subtree_ids
+                                .iter()
+                                .cloned()
+                                .collect::<std::collections::HashSet<_>>()
+                        })
+                        .ok_or_else(|| failure("not_found", "标签不存在"))
+                })
+                .transpose()?;
             let tasks: Vec<_> = snapshot
                 .data
                 .tasks
                 .into_iter()
                 .filter(|t| {
                     (deleted || t.deleted_at.is_none())
+                        && tag_ids
+                            .as_ref()
+                            .is_none_or(|ids| t.tags.iter().any(|tag| ids.contains(tag)))
                         && (query.is_empty()
                             || format!("{} {} {}", t.title, t.content, t.tags.join(" "))
                                 .to_lowercase()
                                 .contains(&query))
                 })
                 .collect();
-            Ok(json!({"tasks":tasks,"lists":snapshot.data.lists}))
+            Ok(json!({"tasks":tasks,"lists":snapshot.data.lists,"tagIndex":snapshot.tag_index}))
         }
         "tasks.get" => {
             let id = string_arg(&params, "id")?;

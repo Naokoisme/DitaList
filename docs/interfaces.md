@@ -53,6 +53,16 @@
 
 MCP 已受理但保存失败的操作保留原参数。关闭时重试，仍为存储错误则显示 closing_failed；若操作已因用户本地改动变成版本冲突等业务终态，核心 `settle_rejected` 持久化 `status=rejected` 和 result.error 后完成关闭，原请求仍可查询，不会无限重试。
 
+## 三层标签
+
+标签最多三层，主标签计第一层。`Task.tags`、`Settings.customTags` 保留字符串键；`Settings.tagParents` 是缺省为空的子键到父键映射。新增子键使用 `父键/名称`，父子关系始终以映射为准，旧名称包含 `/` 的标签仍是一级标签。同级名称唯一，不同父级允许同名；任务只保存直接选择的标签。
+
+本地管理使用 `TagUpsert {name,parent,original}`，新建时 `original=null`，顶层 `parent=null`；回执 `result.id` 返回新键。更名和换父级原子迁移完整子树及任务、导航和筛选引用，拒绝循环、名称冲突与移动后超过三层的情况。`TagRename` 和导航批量更名保持兼容。`TagDelete` 移除标签整棵子树的关联，保留任务。导入、导出和重新打开保留层级；Agent 不获得标签管理权限。
+
+`CoreSnapshot.tagIndex` 提供 `{id,name,parentId,path,rootId,subtreeIds}`；`path` 是用于展示的名称数组，`subtreeIds` 包含自身及全部后代。父级筛选和计数消费该索引并对任务去重。Web 普通任务行按 `rootId` 合并主标签，悬停及详情显示完整路径；侧栏逐层缩进、展开与收起，选择深层标签时展开祖先。标签子级的导航排序组使用 `tag:<父键>`。
+
+MCP `dida_list_list_tasks` 新增可选 `tag` 完整键，包含该标签的全部后代；响应包含 `tagIndex`，便于客户端取得有效路径。`query` 保持文字子串搜索。
+
 ## 分工
 
 root：合同与生成、根清单/锁、src-tauri 启动与 IPC、MCP、脚本/文档与集成。core：crates/core/src 与测试。desktop：src-tauri/src/desktop。web：src（排除 generated）及 tests/web-*。先依合同实现；需要新增操作或窗口 IPC 先发消息给 root。

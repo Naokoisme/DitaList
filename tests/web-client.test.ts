@@ -10,7 +10,7 @@ import type { CoreSnapshot, CommandReceipt, Operation } from "../src/generated/c
 const snapshot = (revision: number): CoreSnapshot => ({
   data: {...createEmptyData(), settings: {...createEmptyData().settings, customTags: []}}, revision, entityVersions: {}, approvals: [], reminders: [],
   focus: {mode: "focus", running: false, taskId: null, title: "", startedAt: null, deadline: null, remainingSeconds: 1500, elapsedSeconds: 0, targetSeconds: 1500},
-  preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 0, pendingCount: 0, reminderCount: 0,
+  preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 0, pendingCount: 0, reminderCount: 0, tagIndex: [],
 });
 const receipt = (requestId: string): CommandReceipt => ({requestId, status: "applied", revision: 2, result: {saved: true}, createdAt: "2026-10-30T00:00:00Z"});
 
@@ -74,3 +74,43 @@ test("Agent configuration uses the provided executable and arguments without a f
   assert.deepEqual(value.mcpServers.ditalist.args, ["--profile", "preview"]);
   assert.equal(value.mcpServers.ditalist.url, undefined);
 });
+for (const code of ['invalid_input', 'conflict', 'not_found', 'forbidden']) {
+  test(`a definitively rejected tag write releases its request id (${code})`, async () => {
+    const ids: string[] = [];
+    mockIPC((command, args: any) => {
+      if (command === 'core_get_request') return null;
+      if (command === 'core_execute') {
+        ids.push(args.command.requestId);
+        if (ids.length === 1) throw {code, message: '标签变更已被核心拒绝'};
+        return receipt(args.command.requestId);
+      }
+      throw new Error(command);
+    });
+    try {
+      const operation: Operation = {type: 'tagUpsert', name: 'rejected-' + code, parent: null, original: null};
+      await assert.rejects(executeOperation(operation), (error: any) => error.code === code);
+      await executeOperation(operation);
+      assert.notEqual(ids[0], ids[1]);
+    } finally { clearMocks(); }
+  });
+}
+for (const code of ['storage', 'closing', 'unknown_ipc']) {
+  test(`an uncertain tag write keeps its request id (${code})`, async () => {
+    const ids: string[] = [];
+    mockIPC((command, args: any) => {
+      if (command === 'core_get_request') return null;
+      if (command === 'core_execute') {
+        ids.push(args.command.requestId);
+        if (ids.length === 1) throw {code, message: '结果仍待核对'};
+        return receipt(args.command.requestId);
+      }
+      throw new Error(command);
+    });
+    try {
+      const operation: Operation = {type: 'tagUpsert', name: 'uncertain-' + code, parent: null, original: null};
+      await assert.rejects(executeOperation(operation), (error: any) => error.code === code);
+      await executeOperation(operation);
+      assert.equal(ids[0], ids[1]);
+    } finally { clearMocks(); }
+  });
+}

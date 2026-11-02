@@ -1,4 +1,5 @@
-import type { HTMLAttributes, MouseEvent, ReactNode } from "react";
+import { useEffect, useState, type HTMLAttributes, type MouseEvent, type ReactNode } from "react";
+import type { TagInfo } from "../generated/contracts";
 import {
   CalendarCheck2,
   CalendarDays,
@@ -36,12 +37,14 @@ import {
 } from "../core/navigation";
 import useNavigationEditing from "./useNavigationEditing";
 import "../app-navigation.css";
+import "../tags.css";
 
 interface AppNavigationProps {
   data: AppData;
   view: ViewId;
   active: Task[];
   tags: string[];
+  tagIndex?: readonly TagInfo[];
   saveStatus: "saved" | "saving" | "error";
   saveStatusLabel: string;
   sidebarOpen: boolean;
@@ -74,6 +77,7 @@ export default function AppNavigation({
   view,
   active,
   tags,
+  tagIndex,
   saveStatus,
   saveStatusLabel,
   sidebarOpen,
@@ -98,6 +102,17 @@ export default function AppNavigation({
   renderTagItem,
   listGroupDropProps,
 }: AppNavigationProps) {
+  const indexedTags: readonly TagInfo[] = tagIndex?.length ? tagIndex : tags.map((id) => ({id, name: id, parentId: null, path: [id], rootId: id, subtreeIds: [id]}));
+  const [expandedTags, setExpandedTags] = useState<Set<string>>(new Set());
+  const selectedTag = view.startsWith("tag:") ? indexedTags.find((tag) => tag.id === view.slice(4)) : undefined;
+  const ancestors = new Set<string>();
+  let parentId = selectedTag?.parentId;
+  while (parentId && !ancestors.has(parentId)) { ancestors.add(parentId); parentId = indexedTags.find((tag) => tag.id === parentId)?.parentId; }
+  const ancestorKey = JSON.stringify([...ancestors]);
+  useEffect(() => {
+    const parents: string[] = JSON.parse(ancestorKey);
+    if (parents.length) setExpandedTags((previous) => parents.every((id) => previous.has(id)) ? previous : new Set([...previous, ...parents]));
+  }, [view, ancestorKey]);
   const today = localDate();
   const fullView = ["calendar", "matrix", "focus", "habits"].includes(view);
   const lists = data.lists
@@ -112,7 +127,8 @@ export default function AppNavigation({
     rail: RAIL_NAV_ITEMS.map((item) => item.id),
     sidebar: SIDEBAR_NAV_ITEMS.map((item) => item.id),
     lists: rootListEntries.map((item) => item.id),
-    tags: tags.map((tag) => `tag:${tag}`),
+    tags: indexedTags.filter((tag) => !tag.parentId).map((tag) => `tag:${tag.id}`),
+    ...Object.fromEntries(indexedTags.filter((tag) => indexedTags.some((child) => child.parentId === tag.id)).map((tag) => [`tag:${tag.id}`, indexedTags.filter((child) => child.parentId === tag.id).map((child) => `tag:${child.id}`)])),
     filters: data.filters.map((filter) => `filter:${filter.id}`),
     ...Object.fromEntries(data.folders.map((folder) => [`folder:${folder.id}`, lists.filter((list) => list.folderId === folder.id).map((list) => `list:${list.id}`)])),
   }, onSaveNavigation, onEditingChange);
@@ -121,7 +137,7 @@ export default function AppNavigation({
   const orderedRail = orderNavigationItems(RAIL_NAV_ITEMS, preferences, "rail");
   const sidebarEntries = orderNavigationItems(SIDEBAR_NAV_ITEMS, preferences, "sidebar").filter((item) => visible(item.id));
   const rootLists = orderNavigationItems(rootListEntries, preferences, "lists").filter((item) => visible(item.id));
-  const visibleTags = orderNavigationItems(tags.map((tag) => ({ id: `tag:${tag}`, tag })), preferences, "tags").filter((item) => visible(item.id));
+  const visibleTags = indexedTags.filter((tag) => !tag.parentId && visible(`tag:${tag.id}`));
   const visibleFilters = orderNavigationItems(data.filters.map((filter) => ({ id: `filter:${filter.id}`, filter })), preferences, "filters").filter((item) => visible(item.id));
   const openEditorFromContext = (event: MouseEvent<HTMLElement>) => {
     // Preserve a list or tag's own menu in the normal navigation mode.
@@ -252,6 +268,22 @@ export default function AppNavigation({
       )}
     </section>
   );
+  const renderTagGroup = (parent: string | null): ReactNode => {
+    const group = parent ? `tag:${parent}` : "tags";
+    const items = orderNavigationItems(indexedTags.filter((tag) => tag.parentId === parent).map((tag) => ({id: `tag:${tag.id}`, tag})), preferences, group).filter((item) => visible(item.id));
+    return items.map(({id, tag}) => {
+      const children = indexedTags.filter((child) => child.parentId === tag.id && visible(`tag:${child.id}`));
+      const expanded = edit.editing || expandedTags.has(tag.id);
+      return <div className="tag-tree-node" role="treeitem" aria-level={tag.path.length} aria-expanded={children.length ? expanded : undefined} key={tag.id}>
+        <div className="tag-tree-row">
+          {children.length ? <button type="button" className={`tag-tree-toggle ${expanded ? "is-expanded" : ""}`} aria-label={`${expanded ? "收起" : "展开"}标签 ${tag.path.join(" › ")}`} aria-expanded={expanded}
+            onClick={() => setExpandedTags((previous) => { const next = new Set(previous); if (next.has(tag.id)) next.delete(tag.id); else next.add(tag.id); return next; })}><ChevronRight size={13}/></button> : <span className="tag-tree-spacer"/>}
+          {sortable(group, id, tag.name, renderTagItem(tag.id))}
+        </div>
+        {children.length > 0 && expanded && <div className="tag-tree-children" role="group">{renderTagGroup(tag.id)}</div>}
+      </div>;
+    });
+  };
   const renderTags = () => (
     <section className="navigation-section" key="section:tags" aria-label="标签">
       <div className="sidebar-section-heading">
@@ -260,7 +292,7 @@ export default function AppNavigation({
           <Plus size={14} />
         </button>
       </div>
-      {visibleTags.map((item) => sortable("tags", item.id, item.tag, renderTagItem(item.tag)))}
+      <div className="tag-tree" role="tree" aria-label="标签层级">{renderTagGroup(null)}</div>
       {tags.length > 0 && visibleTags.length === 0 && hiddenNotice("标签")}
       {tags.length === 0 && (
         <button type="button" className="sidebar-empty-add" onClick={onAddTag}>

@@ -1,9 +1,8 @@
 //! Navigation mutations ported from the explicitly handed-off 81f307e source.
-use crate::{domain, validation};
+use crate::{domain, tags, validation};
 use chrono::{DateTime, Utc};
 use ditalist_contracts::*;
-use regex::{Captures, Regex};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 fn list_group(folder_id: Option<&str>) -> String {
     folder_id
@@ -94,7 +93,7 @@ pub(crate) fn apply(
     preferences: &NavigationPreferences,
     renames: &BTreeMap<String, String>,
     now: DateTime<Utc>,
-) -> Result<(), CoreError> {
+) -> Result<BTreeMap<String, String>, CoreError> {
     validation::navigation(preferences)?;
     let mut existing = BTreeMap::new();
     for list in &data.lists {
@@ -108,13 +107,7 @@ pub(crate) fn apply(
     for filter in &data.filters {
         existing.insert(format!("filter:{}", filter.id), filter.name.clone());
     }
-    let tags: BTreeSet<_> = data
-        .settings
-        .custom_tags
-        .iter()
-        .chain(data.tasks.iter().flat_map(|task| task.tags.iter()))
-        .cloned()
-        .collect();
+    let tags = tags::known(data);
     for tag in &tags {
         existing.insert(format!("tag:{tag}"), tag.clone());
     }
@@ -139,59 +132,11 @@ pub(crate) fn apply(
             tag_names.insert(original.clone(), name.to_owned());
         }
     }
-    let mut final_tags = HashSet::new();
-    for tag in &tags {
-        let final_name = tag_names.get(tag).unwrap_or(tag);
-        if !final_tags.insert(final_name) {
-            return Err(CoreError::new(
-                "conflict",
-                format!("标签“{final_name}”已存在，请使用不同的名称"),
-            ));
-        }
-    }
-    let rename_tag = |tag: &String| tag_names.get(tag).unwrap_or(tag).clone();
-    let rename_key = |key: &String| {
-        key.strip_prefix("tag:")
-            .map(|tag| {
-                format!(
-                    "tag:{}",
-                    tag_names.get(tag).map(String::as_str).unwrap_or(tag)
-                )
-            })
-            .unwrap_or_else(|| key.clone())
-    };
-    let navigation = NavigationPreferences {
-        orders: preferences
-            .orders
-            .iter()
-            .map(|(group, items)| (group.clone(), unique(items.iter().map(&rename_key))))
-            .collect(),
-        hidden: unique(preferences.hidden.iter().map(&rename_key)),
-    };
-    if !tag_names.is_empty() {
-        for task in &mut data.tasks {
-            if task.tags.iter().any(|tag| tag_names.contains_key(tag)) {
-                task.tags = task.tags.iter().map(&rename_tag).collect();
-                task.updated_at = domain::stamp(now);
-            }
-        }
-    }
-    let query_tag = Regex::new(r"(^|\s)#(\S+)").unwrap();
+    let tag_mapping = tags::rename(data, &tag_names, now)?;
     for filter in &mut data.filters {
         if let Some(name) = names.get(&format!("filter:{}", filter.id)) {
             filter.name = name.clone();
         }
-        if !tag_names.is_empty() {
-            filter.query = query_tag
-                .replace_all(&filter.query, |captures: &Captures| {
-                    tag_names
-                        .get(&captures[2])
-                        .map(|name| format!("{}#{name}", &captures[1]))
-                        .unwrap_or_else(|| captures[0].to_owned())
-                })
-                .into_owned();
-        }
-        validation::text(&filter.query, "更名后的筛选条件", 0, 10_000)?;
     }
     for list in &mut data.lists {
         if let Some(name) = names.get(&format!("list:{}", list.id)) {
@@ -203,11 +148,9 @@ pub(crate) fn apply(
             folder.name = name.clone();
         }
     }
-    data.settings.default_view = rename_key(&data.settings.default_view);
-    data.settings.custom_tags = data.settings.custom_tags.iter().map(rename_tag).collect();
-    data.settings.navigation = navigation;
+    data.settings.navigation = tags::rewrite_navigation(preferences, &tag_mapping);
     sync_sort_orders(data);
-    Ok(())
+    Ok(tag_mapping)
 }
 
 pub(crate) fn move_list(

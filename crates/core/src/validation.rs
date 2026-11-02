@@ -193,7 +193,7 @@ pub(crate) fn navigation(preferences: &NavigationPreferences) -> Result<(), Core
         return Err(invalid("隐藏导航项目过多"));
     }
     for (group, items) in &preferences.orders {
-        text(group, "导航分组", 1, 200)?;
+        text(group, "导航分组", 1, 240)?;
         if items.len() > 20_000 {
             return Err(invalid("单个导航分组的项目过多"));
         }
@@ -312,6 +312,7 @@ pub(crate) fn app(data: &mut AppData) -> Result<(), CoreError> {
         }
     }
     settings(&mut data.settings)?;
+    crate::tags::validate(data)?;
     if !data
         .lists
         .iter()

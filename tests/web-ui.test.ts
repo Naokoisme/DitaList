@@ -33,7 +33,7 @@ function fixture(): CoreSnapshot {
     data: data as CoreSnapshot["data"], revision: 1, entityVersions: {existing: 1, pending: 1},
     approvals: [{id: "proposal", taskId: "existing", patch: {title: "整理项目周报", priority: 1}, baseVersion: 1, status: "pending", createdAt: new Date().toISOString()}],
     reminders: [], focus: {mode: "focus", running: true, taskId: "existing", title: "准备周报", startedAt: new Date(Date.now() - 266_000).toISOString(), deadline: new Date(Date.now() + 1_234_000).toISOString(), remainingSeconds: 1234, elapsedSeconds: 266, targetSeconds: 1500},
-    preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 1, pendingCount: 2, reminderCount: 0,
+    preferences: {floatingVisible: true, mcpEnabled: false, quiet: false, confirmPurge: true}, todayCount: 1, pendingCount: 2, reminderCount: 0, tagIndex: [],
   };
 }
 
@@ -46,7 +46,7 @@ async function open(entry = "", state = fixture(), clockAt?: number): Promise<Pa
     let next = 1;
     const f = (window as any).__fixture = {
       snapshot: initial, commands: [] as any[], actions: [] as any[], draft: {text: "", requestId: null as string | null},
-      failures: {} as Record<string, number>, receipts: {} as Record<string, any>,
+      failures: {} as Record<string, number>, failureCodes: {} as Record<string, string>, receipts: {} as Record<string, any>,
       draftFailures: 0, waitCommand: false, releaseCommand: null as (() => void) | null,
       mcp: {state: "closed", command: "D:\\DitaList Preview\\ditalist-mcp.exe", args: ["--data-dir", "D:\\isolated"], contactPath: "D:\\isolated\\contact.json", address: null},
       emit(event: string, payload: any) { for (const id of listeners.get(event) || []) callbacks.get(id)?.({event, id, payload}); },
@@ -62,7 +62,7 @@ async function open(entry = "", state = fixture(), clockAt?: number): Promise<Pa
         if (command === "core_execute") {
           const c = structuredClone(args.command); f.commands.push(c);
           if (f.waitCommand) await new Promise<void>((resolve) => { f.releaseCommand = resolve; });
-          if (f.failures[c.operation.type] > 0) { f.failures[c.operation.type]--; throw {code: "storage", message: "模拟保存失败，内容已保留"}; }
+          if (f.failures[c.operation.type] > 0) { f.failures[c.operation.type]--; throw {code: f.failureCodes[c.operation.type] || "storage", message: "模拟保存失败，内容已保留"}; }
           if (f.receipts[c.requestId]) return f.receipts[c.requestId];
           const receipt = {requestId: c.requestId, status: "applied", revision: ++f.snapshot.revision, createdAt: new Date().toISOString(), result: {id: "created"}};
           f.receipts[c.requestId] = receipt;
@@ -700,4 +700,160 @@ test("quick input keeps failed text and retries the same id; collapse first hand
     assert.deepEqual(await draftPage.evaluate(() => (window as any).__fixture.draft), {text: "尚未提交的草稿", requestId: null});
     assert.equal(await draftPage.evaluate(() => (window as any).__fixture.commands.length), 0);
   } finally { await draftPage.close(); }
+});
+function hierarchyFixture(): CoreSnapshot {
+  const state = fixture();
+  const ids = ["学校", "学校/数据结构", "学校/数据结构/作业", "学校/形势与政策", "学校/形势与政策/论文"];
+  state.tagIndex = [
+    {id: ids[0], name: "学校", parentId: null, path: ["学校"], rootId: ids[0], subtreeIds: ids},
+    {id: ids[1], name: "数据结构", parentId: ids[0], path: ["学校", "数据结构"], rootId: ids[0], subtreeIds: [ids[1], ids[2]]},
+    {id: ids[2], name: "作业", parentId: ids[1], path: ["学校", "数据结构", "作业"], rootId: ids[0], subtreeIds: [ids[2]]},
+    {id: ids[3], name: "形势与政策", parentId: ids[0], path: ["学校", "形势与政策"], rootId: ids[0], subtreeIds: [ids[3], ids[4]]},
+    {id: ids[4], name: "论文", parentId: ids[3], path: ["学校", "形势与政策", "论文"], rootId: ids[0], subtreeIds: [ids[4]]},
+  ];
+  state.data.settings.customTags = ids;
+  state.data.settings.tagParents = {[ids[1]]: ids[0], [ids[2]]: ids[1], [ids[3]]: ids[0], [ids[4]]: ids[3]};
+  state.data.tasks = [
+    {...createTask({id: "structure", title: "完成链表作业", dueDate: localDate()}), tags: [ids[2]]},
+    {...createTask({id: "policy", title: "撰写课程论文", dueDate: localDate()}), tags: [ids[4]]},
+    {...createTask({id: "both", title: "整理课程材料", dueDate: localDate()}), tags: [ids[2], ids[4]]},
+  ];
+  return state;
+}
+
+for (const theme of ["light", "dark"] as const) {
+  test(`nested tags show a collapsible tree, parent counts and full detail paths (${theme})`, async () => {
+    const state = hierarchyFixture(); state.data.settings.theme = theme;
+    const page = await open("", state);
+    try {
+      const tree = page.getByRole("tree", {name: "标签层级"});
+      assert.equal(await tree.getByRole("button", {name: "展开标签 学校", exact: true}).count(), 1);
+      assert.equal(await tree.locator('[data-nav-id="tag:学校/数据结构"]').count(), 0);
+      await tree.getByRole("button", {name: "展开标签 学校", exact: true}).click();
+      assert.equal(await tree.locator('[data-nav-id="tag:学校/数据结构/作业"]').count(), 0);
+      await tree.getByRole("button", {name: "展开标签 学校 › 数据结构", exact: true}).click();
+      assert.equal(await tree.locator('[data-nav-id="tag:学校/数据结构/作业"]').count(), 1);
+      assert.equal(await tree.locator('[data-nav-id="tag:学校"] small').textContent(), "3");
+      assert.equal(await tree.locator('[data-nav-id="tag:学校/数据结构"] small').textContent(), "2");
+      await tree.locator('[data-nav-id="tag:学校"]').click();
+      assert.equal(await page.locator('.task-row').count(), 3);
+      const mixed = page.locator('.task-row[data-task-id="both"]');
+      assert.deepEqual(await mixed.locator('.row-tag').allTextContents(), ["#学校"]);
+      assert.equal(await mixed.locator('.row-tag').getAttribute('title'), "学校 › 数据结构 › 作业\n学校 › 形势与政策 › 论文");
+      await tree.locator('[data-nav-id="tag:学校/数据结构"]').click();
+      assert.equal(await page.locator('.task-row').count(), 2);
+      await page.locator('.task-row[data-task-id="structure"]').click();
+      const detail = page.getByRole('complementary', {name: '任务详情'});
+      assert.equal(await detail.locator('.detail-tag-path').getAttribute('title'), '学校 › 数据结构 › 作业');
+      const input = detail.getByRole('textbox', {name: '添加标签', exact: true});
+      await input.fill('论文');
+      const choice = detail.getByRole('option').filter({hasText: '形势与政策'});
+      assert.equal(await choice.count(), 1);
+      await choice.click();
+      await page.waitForFunction(() => (window as any).__fixture.commands.some((command: any) => command.operation.type === 'taskUpdate'));
+      const command = await page.evaluate(() => (window as any).__fixture.commands.find((command: any) => command.operation.type === 'taskUpdate').operation);
+      assert.deepEqual(command.patch.tags, ['学校/数据结构/作业', '学校/形势与政策/论文']);
+      await mkdir('.local/tag-hierarchy-20261102/web-evidence', {recursive: true});
+      await page.screenshot({path: `.local/tag-hierarchy-20261102/web-evidence/hierarchy-${theme}.png`});
+      await tree.getByRole('button', {name: '收起标签 学校', exact: true}).click();
+      assert.equal(await tree.locator('[data-nav-id="tag:学校/数据结构"]').count(), 0);
+    } finally { await page.close(); }
+  });
+}
+
+test('tag management previews containment, blocks fourth-level parents and retains failed input', async () => {
+  const page = await open('', hierarchyFixture());
+  try {
+    await page.getByRole('button', {name: '新建标签', exact: true}).click();
+    const dialog = page.getByRole('form', {name: '添加标签', exact: true});
+    await dialog.getByRole('textbox', {name: '标签名称'}).fill('实验');
+    await dialog.getByRole('combobox', {name: '所属标签'}).selectOption('学校/数据结构');
+    assert.match(await dialog.getByLabel('标签路径预览').textContent() || '', /学校 › 数据结构 › 实验/);
+    assert.equal(await dialog.locator('option[value="学校/数据结构/作业"]').evaluate((option: HTMLOptionElement) => option.disabled), true);
+    await page.evaluate(() => { (window as any).__fixture.failures.tagUpsert = 1; });
+    await dialog.getByRole('button', {name: '添加', exact: true}).click();
+    await dialog.getByRole('alert').waitFor();
+    assert.equal(await dialog.getByRole('textbox', {name: '标签名称'}).inputValue(), '实验');
+    assert.equal(await dialog.getByRole('combobox', {name: '所属标签'}).inputValue(), '学校/数据结构');
+    const operation = await page.evaluate(() => (window as any).__fixture.commands.find((command: any) => command.operation.type === 'tagUpsert').operation);
+    assert.deepEqual(operation, {type: 'tagUpsert', name: '实验', parent: '学校/数据结构', original: null});
+    await dialog.getByRole('button', {name: '取消', exact: true}).click();
+    await page.getByRole('button', {name: '展开标签 学校', exact: true}).click();
+    await page.getByRole('button', {name: '编辑标签 学校/数据结构', exact: true}).click();
+    const edit = page.getByRole('form', {name: '编辑标签', exact: true});
+    assert.equal(await edit.getByRole('textbox', {name: '标签名称'}).inputValue(), '数据结构');
+    assert.equal(await edit.getByRole('combobox', {name: '所属标签'}).inputValue(), '学校');
+    assert.equal(await edit.locator('option[value="学校/数据结构"]').count(), 0);
+    assert.equal(await edit.locator('option[value="学校/数据结构/作业"]').count(), 0);
+    assert.equal(await edit.locator('option[value="学校/形势与政策"]').evaluate((option: HTMLOptionElement) => option.disabled), true);
+    assert.match(await edit.locator('.tag-delete-hint').textContent() || '', /1 个子标签.*任务会保留/);
+  } finally { await page.close(); }
+});
+
+test('legacy tag names containing a slash stay flat in old snapshots', async () => {
+  const state = fixture(); state.data.settings.customTags = ['学校/旧课程'];
+  const page = await open('', state);
+  try {
+    const tree = page.getByRole('tree', {name: '标签层级'});
+    assert.equal(await tree.locator('[data-nav-id="tag:学校/旧课程"]').textContent(), '学校/旧课程');
+    assert.equal(await tree.getByRole('button', {name: /展开标签/}).count(), 0);
+  } finally { await page.close(); }
+});
+for (const code of ['conflict', 'invalid_input']) {
+  test(`a rejected tag draft can be cancelled and the window closed (${code})`, async () => {
+    const page = await open('', hierarchyFixture());
+    try {
+      await page.evaluate((code) => { const f = (window as any).__fixture; f.failures.tagUpsert = 1; f.failureCodes.tagUpsert = code; }, code);
+      await page.getByRole('button', {name: '新建标签', exact: true}).click();
+      const dialog = page.getByRole('form', {name: '添加标签', exact: true});
+      await dialog.getByRole('textbox', {name: '标签名称'}).fill(code === 'conflict' ? '学校' : '层级冲突');
+      await dialog.getByRole('button', {name: '添加', exact: true}).click();
+      await dialog.getByRole('alert').waitFor();
+      assert.equal(await page.getByText('1 项操作尚未确认保存', {exact: true}).count(), 0);
+      await dialog.getByRole('button', {name: '取消', exact: true}).click();
+      await page.evaluate(() => (window as any).__fixture.emit('desktop://prepare-close', {window: 'main'}));
+      await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === 'closeMain'));
+    } finally { await page.close(); }
+  });
+}
+
+test('a rejected new tag preserves the earlier storage failure through cancellation and retry', async () => {
+  const page = await open('', hierarchyFixture());
+  try {
+    await page.evaluate(() => { const f = (window as any).__fixture; f.failures.tagUpsert = 2; f.failureCodes.tagUpsert = 'storage'; });
+    await page.getByRole('button', {name: '新建标签', exact: true}).click();
+    let dialog = page.getByRole('form', {name: '添加标签', exact: true});
+    await dialog.getByRole('textbox', {name: '标签名称'}).fill('保留的标签草稿');
+    await dialog.getByRole('button', {name: '添加', exact: true}).click();
+    await dialog.getByRole('alert').waitFor();
+    await page.getByText('1 项操作尚未确认保存', {exact: true}).waitFor();
+    await dialog.getByRole('button', {name: '取消', exact: true}).click();
+    await page.evaluate(() => (window as any).__fixture.emit('desktop://prepare-close', {window: 'main'}));
+    await page.getByText('还有未确认保存的操作，请先重试或放弃这些操作，再关闭。', {exact: true}).waitFor();
+    assert.equal(await page.evaluate(() => (window as any).__fixture.actions.some((item: any) => item.action === 'closeMain')), false);
+    await page.evaluate(() => { (window as any).__fixture.failureCodes.tagUpsert = 'conflict'; });
+    await page.getByRole('button', {name: '新建标签', exact: true}).click();
+    dialog = page.getByRole('form', {name: '添加标签', exact: true});
+    await dialog.getByRole('textbox', {name: '标签名称'}).fill('学校');
+    await dialog.getByRole('button', {name: '添加', exact: true}).click();
+    await dialog.getByRole('alert').waitFor();
+    await page.getByText('1 项操作尚未确认保存', {exact: true}).waitFor();
+    await dialog.getByRole('button', {name: '取消', exact: true}).click();
+    await page.evaluate(() => (window as any).__fixture.emit('desktop://prepare-close', {window: 'main'}));
+    await page.getByText('还有未确认保存的操作，请先重试或放弃这些操作，再关闭。', {exact: true}).waitFor();
+    assert.equal(await page.evaluate(() => (window as any).__fixture.actions.some((item: any) => item.action === 'closeMain')), false);
+    await page.getByRole('button', {name: '新建标签', exact: true}).click();
+    dialog = page.getByRole('form', {name: '添加标签', exact: true});
+    await dialog.getByRole('textbox', {name: '标签名称'}).fill('独立的新标签');
+    await dialog.getByRole('button', {name: '添加', exact: true}).click();
+    await dialog.waitFor({state: 'hidden'});
+    await page.getByText('1 项操作尚未确认保存', {exact: true}).waitFor();
+    await page.getByRole('button', {name: '重试保存', exact: true}).click();
+    await page.getByText('1 项操作尚未确认保存', {exact: true}).waitFor({state: 'detached'});
+    const commands = await page.evaluate(() => (window as any).__fixture.commands.filter((item: any) => item.operation.type === 'tagUpsert'));
+    assert.deepEqual(commands.map((item: any) => item.operation.name), ['保留的标签草稿', '学校', '独立的新标签', '保留的标签草稿']);
+    assert.equal(commands[0].requestId, commands[3].requestId);
+    await page.evaluate(() => (window as any).__fixture.emit('desktop://prepare-close', {window: 'main'}));
+    await page.waitForFunction(() => (window as any).__fixture.actions.some((item: any) => item.action === 'closeMain'));
+  } finally { await page.close(); }
 });

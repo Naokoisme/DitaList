@@ -6,6 +6,7 @@ mod navigation;
 mod reminders;
 mod service;
 mod storage;
+mod tags;
 mod validation;
 
 pub use ditalist_contracts::*;

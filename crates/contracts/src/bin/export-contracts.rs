@@ -15,6 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         SavedFilter,
         FocusSession,
         NavigationPreferences,
+        TagInfo,
         Settings,
         AppData,
         Preferences,

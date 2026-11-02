@@ -14,6 +14,11 @@ export function errorMessage(error: unknown): string {
   return String(error);
 }
 
+export function isRejectedTagUpsert(operation: Operation, error: unknown): boolean {
+  return operation.type === "tagUpsert" && typeof error === "object" && error !== null && "code" in error &&
+    ["invalid_input", "conflict", "not_found", "forbidden"].includes(String(error.code));
+}
+
 function decodeSnapshot(value: CoreSnapshot): Snapshot {
   if (!value || !Number.isSafeInteger(value.revision) || !Array.isArray(value.approvals) ||
       !Array.isArray(value.reminders) || !value.preferences || !value.focus ||
@@ -55,6 +60,10 @@ export async function executeOperation(operation: Operation, requestId?: string)
     uncertain.delete(key);
     return receipt;
   } catch (error) {
+    if (isRejectedTagUpsert(operation, error)) {
+      if (uncertain.get(key) === id) uncertain.delete(key);
+      throw error;
+    }
     // A lost IPC reply does not mean the operation was rolled back. Keep its business id.
     try {
       const receipt = await getRequest(id);

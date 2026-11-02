@@ -93,6 +93,7 @@ pub(crate) fn empty_data() -> AppData {
             floating_default_list_id: "inbox".into(),
             floating_default_date: "today".into(),
             custom_tags: vec![],
+            tag_parents: BTreeMap::new(),
             navigation: NavigationPreferences::default(),
         },
     }
@@ -250,7 +251,7 @@ pub(crate) fn quick_input(input: &str, list: &str, day: NaiveDate) -> Result<Val
     let mut title = input.trim().to_owned();
     let mut result = json!({"title": title, "listId": list});
     let mut tags = vec![];
-    title = Regex::new(r"(^|\s)#([\p{L}\p{N}_-]+)")
+    title = Regex::new(r"(^|\s)#([\p{L}\p{N}_-]+(?:/[\p{L}\p{N}_-]+)*)")
         .unwrap()
         .replace_all(&title, |cap: &Captures| {
             let tag = cap[2].to_owned();

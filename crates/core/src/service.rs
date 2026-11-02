@@ -1,7 +1,7 @@
 use crate::{
     domain, focus, import, navigation, reminders,
     storage::{Persisted, RecordedRequest, Store},
-    validation,
+    tags, validation,
 };
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use ditalist_contracts::*;
@@ -82,6 +82,7 @@ impl CoreService {
             today_count,
             pending_count,
             reminder_count,
+            tag_index: tags::index(&state.data),
         }
     }
 
@@ -528,6 +529,31 @@ fn local_confirmation(state: &Persisted, confirmed: bool) -> Result<(), CoreErro
     Ok(())
 }
 
+fn rewrite_approval_tags(
+    state: &mut Persisted,
+    mapping: &std::collections::BTreeMap<String, String>,
+    removed: &BTreeSet<String>,
+) {
+    if mapping.is_empty() && removed.is_empty() {
+        return;
+    }
+    for approval in &mut state.approvals {
+        if approval.status != "pending" {
+            continue;
+        }
+        if let Some(values) = approval.patch.get_mut("tags").and_then(Value::as_array_mut) {
+            values.retain(|value| !value.as_str().is_some_and(|tag| removed.contains(tag)));
+            let mut seen = HashSet::new();
+            for value in values.iter_mut() {
+                if let Some(next) = value.as_str().and_then(|tag| mapping.get(tag)) {
+                    *value = json!(next);
+                }
+            }
+            values.retain(|value| seen.insert(value.to_string()));
+        }
+    }
+}
+
 fn apply(
     state: &mut Persisted,
     focus: &mut focus::Runtime,
@@ -798,7 +824,8 @@ fn apply(
             preferences,
             renames,
         } => {
-            navigation::apply(&mut state.data, preferences, renames, now)?;
+            let mapping = navigation::apply(&mut state.data, preferences, renames, now)?;
+            rewrite_approval_tags(state, &mapping, &BTreeSet::new());
             Ok(("saved", json!({})))
         }
         Operation::PreferencesUpdate { patch } => {
@@ -815,20 +842,31 @@ fn apply(
         Operation::TagRename { from, to } => {
             let preferences = state.data.settings.navigation.clone();
             let renames = std::collections::BTreeMap::from([(format!("tag:{from}"), to.clone())]);
-            navigation::apply(&mut state.data, &preferences, &renames, now)?;
+            let mapping = navigation::apply(&mut state.data, &preferences, &renames, now)?;
+            rewrite_approval_tags(state, &mapping, &BTreeSet::new());
             Ok((
                 "saved",
                 json!({"name":to.trim().trim_start_matches('#').trim()}),
             ))
         }
+        Operation::TagUpsert {
+            name,
+            parent,
+            original,
+        } => {
+            let (id, mapping) = tags::upsert(
+                &mut state.data,
+                name,
+                parent.as_deref(),
+                original.as_deref(),
+                now,
+            )?;
+            rewrite_approval_tags(state, &mapping, &BTreeSet::new());
+            Ok(("saved", json!({"id":id})))
+        }
         Operation::TagDelete { name } => {
-            state.data.settings.custom_tags.retain(|tag| tag != name);
-            for task in &mut state.data.tasks {
-                if task.tags.contains(name) {
-                    task.tags.retain(|tag| tag != name);
-                    task.updated_at = domain::stamp(now);
-                }
-            }
+            let removed = tags::delete(&mut state.data, name, now);
+            rewrite_approval_tags(state, &std::collections::BTreeMap::new(), &removed);
             Ok(("saved", json!({"name":name})))
         }
         Operation::HabitRecord { id, date, value } => {
@@ -1088,6 +1126,7 @@ fn merge_import(
     now: DateTime<Utc>,
 ) -> Result<(&'static str, Value), CoreError> {
     let incoming = import::parse(text, now)?;
+    tags::merge(&mut state.data, &incoming.data)?;
     let mut warnings = incoming.warnings;
     let existing: HashSet<_> = state
         .data

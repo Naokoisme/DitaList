@@ -11,6 +11,8 @@ use std::path::PathBuf;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ListArgs {
     query: Option<String>,
+    /// 标签完整键，如 学校/数据结构；包含该标签及全部下级。
+    tag: Option<String>,
     include_deleted: Option<bool>,
 }
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -101,7 +103,7 @@ impl Bridge {
     }
     #[tool(
         name = "dida_list_list_tasks",
-        description = "查询本机 DitaList 任务。Agent pending 任务尚未获用户批准。query 按标题、正文或标签进行子串搜索。"
+        description = "查询本机 DitaList 任务。Agent pending 任务尚未获用户批准。query 按标题、正文或标签进行子串搜索；tag 使用完整标签键筛选并包含全部下级，返回 tagIndex 提供标签层级。"
     )]
     async fn list_tasks(&self, Parameters(args): Parameters<ListArgs>) -> CallToolResult {
         self.call("tasks.list", args).await
