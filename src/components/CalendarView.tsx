@@ -1116,11 +1116,7 @@ export default function CalendarView({
                 {timeDates.map((date) => (
                   <div
                     key={date}
-                    className={
-                      dragOver === date && !timeDropPreview
-                        ? "cal-time-allday-cell is-drop"
-                        : "cal-time-allday-cell"
-                    }
+                    className={`cal-time-allday-cell ${date === today ? "is-today" : ""} ${dragOver === date && !timeDropPreview ? "is-drop" : ""}`}
                     onDoubleClick={() => onCreateTask(date)}
                     onDragOver={(event) => allowDrop(event, date)}
                     onDragLeave={leaveDropTarget}

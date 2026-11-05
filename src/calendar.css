@@ -574,6 +574,12 @@
 .cal-date-number:hover {
   background: var(--hover, rgba(0, 0, 0, 0.06));
 }
+.cal-day--today {
+  /* A dense 7x5 grid needs more than the date pill to locate today. */
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  outline: 1.5px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  outline-offset: -2px;
+}
 .cal-day--today .cal-date-number {
   background: var(--soft);
   color: var(--accent-ink);
@@ -882,6 +888,23 @@
   background: var(--soft);
   color: var(--accent-ink);
 }
+/* Week view reads today as one box: header, all-day row and the timed grid.
+   Day view already names the date in its title, so a full-page frame is noise there. */
+.cal-time-view:not(.cal-time-view--day) .cal-time-dayhead.is-today {
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.cal-time-view:not(.cal-time-view--day) .cal-time-allday-cell.is-today {
+  border-inline: 1.5px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.cal-time-view:not(.cal-time-view--day) .cal-time-column.is-today {
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 75%, transparent);
+  border-top: 0;
+  border-radius: 0 0 7px 7px;
+}
 .cal-time-dayhead:hover {
   background: var(--hover, rgba(0, 0, 0, 0.025));
 }
@@ -943,7 +966,7 @@
   min-width: 0;
 }
 .cal-time-column.is-today {
-  background: var(--soft, #4772fa05);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 .cal-hour-cell {
   position: absolute;

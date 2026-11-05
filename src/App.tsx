@@ -146,6 +146,21 @@ const colors = [
   "#81909d",
 ];
 const stamp = () => new Date().toISOString();
+const UNDO_LIMIT = 20;
+// Fields whose edits are recoverable by Ctrl+Z; everything else stays out of the undo stack.
+const UNDO_FIELDS = ["title", "content", "dueDate", "startDate", "time", "endTime", "priority", "pinned", "tags", "subtasks", "listId", "repeat", "reminder"] as const;
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLInputElement)
+    return !["checkbox", "radio", "button", "submit", "reset", "range", "color", "file"].includes(target.type);
+  return false;
+}
+const isUndoablePatch = (patch: Partial<Task>) => {
+  const keys = Object.keys(patch);
+  return keys.length > 0 && keys.every((key) => (UNDO_FIELDS as readonly string[]).includes(key));
+};
 const TargetIcon = Clock3;
 
 function shortcutLabel(shortcut: string) {
@@ -263,6 +278,9 @@ export default function App() {
   const [calendarKey, setCalendarKey] = useState(0);
   const [calendarBacklogOpen, setCalendarBacklogOpen] = useState(false);
   const [toast, setToast] = useState("");
+  // The core owns persistence, so undo replays the inverse operation instead of rolling back a snapshot.
+  const [toastAction, setToastAction] = useState<{label: string; run: () => void} | null>(null);
+  const undoStack = useRef<{label: string; operation: Operation}[]>([]);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
   const [settingsSection, setSettingsSection] = useState<
     "general" | "data" | null
@@ -379,6 +397,20 @@ export default function App() {
     void pending.finally(() => pendingWrites.current.delete(pending));
     return pending;
   }, [acceptSnapshot]);
+  const pushUndo = useCallback((label: string, operation: Operation) => {
+    const entry = {label, operation};
+    undoStack.current.push(entry);
+    if (undoStack.current.length > UNDO_LIMIT) undoStack.current.shift();
+    return entry;
+  }, []);
+  const undo = useCallback(() => {
+    const entry = undoStack.current.pop();
+    if (!entry) { setToast("没有可撤销的操作了。"); return; }
+    void perform(entry.operation).then((receipt) => {
+      if (!receipt) { undoStack.current.push(entry); return; }
+      setToast(`已撤销：${entry.label}`);
+    });
+  }, [perform]);
   useEffect(() => {
     let canceled = false;
     const cleanups: (() => void)[] = [];
@@ -471,7 +503,7 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    if (!toast) return;
+    if (!toast) { setToastAction(null); return; }
     const t = setTimeout(() => setToast(""), 5500);
     return () => clearTimeout(t);
   }, [toast]);
@@ -495,12 +527,33 @@ export default function App() {
     return () => m.removeEventListener("change", sync);
   }, [data?.settings.theme, data?.settings.accent]);
   const patchTask = useCallback((id: string, patch: Partial<Task>) => {
-    return perform({type: "taskUpdate", id, patch, expectedVersion: null});
-  }, [perform]);
+    const current = latestSnapshot.current?.data.tasks.find((item) => item.id === id);
+    const undoable = !!current && isUndoablePatch(patch);
+    return perform({type: "taskUpdate", id, patch, expectedVersion: null}).then((receipt) => {
+      // Only a stored write is worth reverting; a failed one stays retryable instead.
+      if (receipt && undoable) {
+        const restore: Partial<Task> = {};
+        for (const key of Object.keys(patch) as (keyof Task)[]) restore[key] = current[key] as never;
+        pushUndo("修改任务", {type: "taskUpdate", id, patch: restore, expectedVersion: null});
+      }
+      return receipt;
+    });
+  }, [perform, pushUndo]);
   const toggle = useCallback((id: string) => {
     const task = latestSnapshot.current?.data.tasks.find((item) => item.id === id);
-    if (task && !task.deletedAt) void perform({type: "taskComplete", id, completed: !task.completedAt});
-  }, [perform]);
+    if (task && !task.deletedAt) {
+      const entry = pushUndo(task.completedAt ? "取消完成" : "完成任务", {type: "taskComplete", id, completed: !!task.completedAt});
+      void perform({type: "taskComplete", id, completed: !task.completedAt}).then((receipt) => {
+        if (!receipt) {
+          const index = undoStack.current.indexOf(entry);
+          if (index >= 0) undoStack.current.splice(index, 1);
+          return;
+        }
+        setToastAction({label: "撤销", run: undo});
+        setToast(task.completedAt ? `已取消完成：${task.title || "无标题任务"}` : `已完成：${task.title || "无标题任务"}`);
+      });
+    }
+  }, [perform, pushUndo, undo]);
   const go = useCallback((next: ViewId) => {
     setView(next);
     setSelectedId(null);
@@ -538,6 +591,13 @@ export default function App() {
         setSidebarOpen(false);
         return;
       }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        // Inside a text field the browser's own text undo must win.
+        if (isTextEditingTarget(e.target)) return;
+        e.preventDefault();
+        undo();
+        return;
+      }
       if (e.ctrlKey || e.metaKey) {
         if (e.key.toLowerCase() === "k") {
           e.preventDefault();
@@ -565,7 +625,7 @@ export default function App() {
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [go, openNewTask]);
+  }, [go, openNewTask, undo]);
   const selected = data?.tasks.find((t) => t.id === selectedId) || null;
   const tagIndex = useMemo(() => displayTagIndex(data, snapshot?.tagIndex), [data, snapshot?.tagIndex]);
   const listIndex = useMemo(() => displayListIndex(data, snapshot?.listIndex), [data, snapshot?.listIndex]);
@@ -677,13 +737,19 @@ export default function App() {
   }
   async function trashTask(id: string) {
     if (await perform({type: "taskTrash", id})) {
+      pushUndo("移入回收站", {type: "taskRestore", id});
       if (selectedId === id) setSelectedId(null);
-      setContext(null); setToast("任务已移到回收站，可随时恢复。");
+      setContext(null);
+      setToastAction({label: "撤销", run: undo});
+      setToast("任务已移到回收站，可随时恢复。");
     }
   }
   async function restoreTask(id: string) {
     if (await perform({type: "taskRestore", id})) {
-      setContext(null); setToast("任务已恢复。");
+      pushUndo("恢复任务", {type: "taskTrash", id});
+      setContext(null);
+      setToastAction({label: "撤销", run: undo});
+      setToast("任务已恢复。");
     }
   }
   async function purgeTask(id?: string) {
@@ -1705,6 +1771,7 @@ export default function App() {
               ["Ctrl + N", "新建任务"],
               ["Ctrl + K", "搜索全部任务"],
               ["Ctrl + 1 / 2 / 3 / 4", "今天 / 最近7天 / 收集箱 / 日历"],
+              ["Ctrl + Z", "撤销上一步操作"],
               ["Enter", "快速添加任务"],
               [shortcutLabel(data.settings.floatingShortcut), "展开悬浮栏快速输入"],
               ["Esc", "关闭详情和弹窗"],
@@ -1753,6 +1820,19 @@ export default function App() {
       {toast && (
         <div className="toast" role="status">
           {toast}
+          {toastAction && (
+            <button
+              className="toast-action"
+              onClick={() => {
+                const action = toastAction;
+                setToastAction(null);
+                setToast("");
+                action.run();
+              }}
+            >
+              {toastAction.label}
+            </button>
+          )}
           <button aria-label="关闭提示" onClick={() => setToast("")}>
             <X size={14} />
           </button>

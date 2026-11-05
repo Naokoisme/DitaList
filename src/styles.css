@@ -2397,6 +2397,19 @@ textarea::placeholder {
   color: #fff;
   flex-shrink: 0;
 }
+.toast .toast-action {
+  display: inline-flex;
+  padding: 3px 9px;
+  border-radius: 5px;
+  background: #ffffff26;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.toast .toast-action:hover {
+  background: #ffffff3d;
+}
 .tool-view {
   height: 100%;
   overflow: auto;

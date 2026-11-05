@@ -31,6 +31,8 @@ cargo build --locked --release -p ditalist-mcp
 
 主程序位于 `target\release\DitaListRust.exe`；`--main` 可直接打开主界面。正常启动只创建原生栏和托盘。`Ctrl+Alt+Space` 展开快速输入。主界面关闭后保留 30 秒再释放，托盘“退出”才结束后台。
 
+主界面快捷键：`Ctrl+N` 新建任务，`Ctrl+K` 搜索，`Ctrl+1/2/3/4` 切换今天／最近7天／收集箱／日历，`Ctrl+Z` 撤销上一步（最多 20 步，覆盖完成／移入回收站／改日期时间／改标题等；光标在文本框内时让给原生文本撤销），`Esc` 关闭详情和弹窗。撤销只在前端内存中记录，重启应用后清空。
+
 独立 Git 提交完成后，运行 `node scripts/package-preview.mjs` 生成免安装 ZIP、Inno Setup 和产物哈希清单。脚本要求干净工作区，并重新构建主程序与 MCP。默认不签署候选，不推送或创建 Release。
 
 诊断构建可显式设置 `VITE_DITALIST_DRAG_TRACE=1` 记录拖放事件名/坐标/MIME类型（不记录任务正文）；`DITALIST_SOURCE_MAPS=1` 输出源码映射。候选打包关闭这两项。`runtime.jsonl` 记录窗口请求/就绪/销毁、命令结果和退出，联系凭据不进入日志。

@@ -21,7 +21,7 @@ const payload = path.join(output, 'DitaList-Rust-Preview');
 await fs.mkdir(payload, {recursive: true});
 for (const binary of ['DitaListRust.exe', 'ditalist-mcp.exe']) await fs.copyFile(path.join(root, 'target/release', binary), path.join(payload, binary));
 await fs.copyFile(path.join(root, 'public/icon.ico'), path.join(payload, 'icon.ico'));
-await fs.writeFile(path.join(payload, '使用说明.txt'), '双击 DitaListRust.exe 启动原生悬浮栏，点击今天打开主界面。\r\nCtrl+Alt+Space 打开快速输入；主窗口关闭后保留30秒再释放，托盘退出才结束后台。\r\n预览版数据：%APPDATA%\\DitaListRustPreview\\data。不会读取或迁移日用版数据。\r\nMCP 默认关闭，在设置开启并复制配置；请保留 ditalist-mcp.exe 与主程序同目录。\r\n本候选需要 Windows x64 与 WebView2。缺少运行时请使用 Setup 联网补装。\r\n');
+await fs.writeFile(path.join(payload, '使用说明.txt'), '双击 DitaListRust.exe 启动原生悬浮栏，点击今天打开主界面。\r\nCtrl+Alt+Space 打开快速输入；主窗口关闭后保留30秒再释放，托盘退出才结束后台。\r\n主界面快捷键：Ctrl+N 新建、Ctrl+K 搜索、Ctrl+1/2/3/4 切换视图、Ctrl+Z 撤销上一步（文本框内为原生文本撤销）、Esc 关闭。\r\n预览版数据：%APPDATA%\\DitaListRustPreview\\data。不会读取或迁移日用版数据。\r\nMCP 默认关闭，在设置开启并复制配置；请保留 ditalist-mcp.exe 与主程序同目录。\r\n本候选需要 Windows x64 与 WebView2。缺少运行时请使用 Setup 联网补装。\r\n');
 const files = [];
 for (const name of (await fs.readdir(payload)).sort()) {
   const bytes = await fs.readFile(path.join(payload, name));

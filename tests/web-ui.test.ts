@@ -67,6 +67,9 @@ async function open(entry = "", state = fixture(), clockAt?: number): Promise<Pa
           const receipt = {requestId: c.requestId, status: "applied", revision: ++f.snapshot.revision, createdAt: new Date().toISOString(), result: {id: "created"}};
           f.receipts[c.requestId] = receipt;
           if (c.operation.type === "taskUpdate") Object.assign(f.snapshot.data.tasks.find((task: any) => task.id === c.operation.id), c.operation.patch);
+          if (c.operation.type === "taskComplete") Object.assign(f.snapshot.data.tasks.find((task: any) => task.id === c.operation.id), {completedAt: c.operation.completed ? new Date().toISOString() : null});
+          if (c.operation.type === "taskTrash") Object.assign(f.snapshot.data.tasks.find((task: any) => task.id === c.operation.id), {deletedAt: new Date().toISOString()});
+          if (c.operation.type === "taskRestore") Object.assign(f.snapshot.data.tasks.find((task: any) => task.id === c.operation.id), {deletedAt: null});
           if (c.operation.type === "settingsUpdate") Object.assign(f.snapshot.data.settings, c.operation.patch);
           if (c.operation.type === "navigationUpdate") f.snapshot.data.settings.navigation = structuredClone(c.operation.preferences);
           f.emit("core://changed", structuredClone(f.snapshot));
@@ -1044,3 +1047,41 @@ for (const destination of ['tag:学校', 'list:school']) {
     } finally { await page.close(); }
   });
 }
+
+// Undo replays the inverse operation through the same core channel; the toast button and Ctrl+Z share one stack.
+test('undo restores completion from the toast action and Ctrl+Z', async () => {
+  const page = await open();
+  try {
+    const row = page.locator('.task-row[data-task-id="existing"]');
+    await row.getByRole('button', {name: '完成 准备周报', exact: true}).click();
+    const completes = () => page.evaluate(() => (window as any).__fixture.commands.filter((c: any) => c.operation.type === 'taskComplete'));
+    await page.waitForFunction(() => (window as any).__fixture.commands.some((c: any) => c.operation.type === 'taskComplete'));
+    assert.deepEqual((await completes())[0].operation, {type: 'taskComplete', id: 'existing', completed: true});
+    assert.equal(await page.locator('.task-row[data-task-id="existing"]').count(), 0);
+    await page.getByRole('button', {name: '撤销', exact: true}).click();
+    await page.waitForFunction(() => (window as any).__fixture.commands.filter((c: any) => c.operation.type === 'taskComplete').length === 2);
+    assert.deepEqual((await completes())[1].operation, {type: 'taskComplete', id: 'existing', completed: false});
+    await page.locator('.task-row[data-task-id="existing"]').waitFor();
+    // Ctrl+Z on a non-text target walks the same stack.
+    await page.locator('.task-row[data-task-id="existing"]').getByRole('button', {name: '完成 准备周报', exact: true}).click();
+    await page.waitForFunction(() => (window as any).__fixture.commands.filter((c: any) => c.operation.type === 'taskComplete').length === 3);
+    await page.locator('.task-row[data-task-id="existing"]').waitFor({state: 'detached'});
+    await page.keyboard.press('Control+z');
+    await page.waitForFunction(() => (window as any).__fixture.commands.filter((c: any) => c.operation.type === 'taskComplete').length === 4);
+    assert.deepEqual((await completes())[3].operation, {type: 'taskComplete', id: 'existing', completed: false});
+    await page.locator('.task-row[data-task-id="existing"]').waitFor();
+  } finally { await page.close(); }
+});
+
+test('Ctrl+Z inside a text field keeps the native text undo', async () => {
+  const page = await open();
+  try {
+    await page.getByRole('button', {name: '添加任务 Ctrl+N', exact: true}).click();
+    const title = page.getByRole('textbox', {name: '新任务标题', exact: true});
+    await title.fill('会被撤销的标题');
+    await title.focus();
+    await page.keyboard.press('Control+z');
+    assert.equal(await title.inputValue(), '');
+    assert.equal(await page.evaluate(() => (window as any).__fixture.commands.some((c: any) => c.operation.type === 'taskComplete')), false);
+  } finally { await page.close(); }
+});
