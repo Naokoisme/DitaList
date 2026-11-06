@@ -169,6 +169,7 @@ function lunarLabel(date: string) {
 
 function weekEvents(tasks: Task[], start: string): SpanEvent[] {
   const end = addDays(start, 6);
+  const dates = Array.from({ length: 7 }, (_, i) => addDays(start, i));
   const lanes: number[] = [];
   return tasks
     .filter(
@@ -181,7 +182,6 @@ function weekEvents(tasks: Task[], start: string): SpanEvent[] {
         taskOrder(a, b),
     )
     .map((task) => {
-      const dates = Array.from({ length: 7 }, (_, i) => addDays(start, i));
       const first = Math.max(
         0,
         dates.findIndex((d) => d >= taskStart(task)!),
@@ -238,7 +238,7 @@ function timeEvents(tasks: Task[], date: string): TimedEvent[] {
     event.column = column;
     ends[column] = event.end;
     cluster.push(event);
-    clusterEnd = Math.max(event.end, ...cluster.map((t) => t.end));
+    clusterEnd = Math.max(clusterEnd, event.end);
   }
   finish();
   return events;

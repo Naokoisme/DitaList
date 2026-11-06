@@ -766,6 +766,35 @@ fn catchup_uses_effective_fire_day_including_advance_and_midnight_snooze() {
     assert!(due_ids(h.core.tick().unwrap()).is_empty());
 }
 
+#[cfg(windows)]
+#[test]
+fn due_focus_storage_failure_preserves_state_and_recovers_once() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let h = Harness::new();
+    command(&h.core, Operation::SettingsUpdate { patch: json!({"pomodoroMinutes":1}) });
+    command(&h.core, Operation::Focus { action: "start".into(), task_id: None });
+    let revision = h.core.snapshot().revision;
+    let path = h.dir.path().join("database.rust.json");
+    let saved = std::fs::read(&path).unwrap();
+    let held = std::fs::OpenOptions::new().read(true).share_mode(0x1 | 0x2).open(&path).unwrap();
+    h.clock.fetch_add(60_000, Ordering::SeqCst);
+    for _ in 0..3 {
+        assert_eq!(h.core.tick().unwrap_err().code, "storage");
+        let state = h.core.snapshot();
+        assert_eq!(state.revision, revision);
+        assert!(state.focus.running);
+        assert!(state.data.focus_sessions.is_empty());
+        assert_eq!(std::fs::read(&path).unwrap(), saved);
+    }
+    drop(held);
+    let effects = h.core.tick().unwrap();
+    assert_eq!(effects.iter().filter(|effect| matches!(effect, CoreEffect::FocusCompleted(_))).count(), 1);
+    assert_eq!(h.core.snapshot().data.focus_sessions.len(), 1);
+    assert!(!h.core.snapshot().focus.running);
+    assert!(h.core.tick().unwrap().is_empty());
+    assert_eq!(h.core.snapshot().data.focus_sessions.len(), 1);
+}
+
 #[test]
 fn focus_continues_without_views_and_records_completion_once() {
     let h = Harness::new();

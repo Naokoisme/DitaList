@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod desktop;
+mod retry_backoff;
 use desktop::{Desktop, DesktopAction};
 use ditalist_contracts::*;
 use ditalist_core::CoreService;
@@ -28,6 +29,7 @@ struct Host {
     local: Arc<LocalBarrier>,
     quitting: AtomicBool,
     handoff: ExitHandoff,
+    tick_gate: tokio::sync::Mutex<()>,
 }
 
 #[derive(Default)]
@@ -135,11 +137,13 @@ fn publish(
     core: &CoreService,
     desktop: &Desktop,
     wake: &tokio::sync::Notify,
-) {
+) -> bool {
     let snapshot = core.snapshot();
+    let mcp_enabled = snapshot.preferences.mcp_enabled;
     desktop.update(snapshot.clone());
     let _ = app.emit("core://changed", &snapshot);
     wake.notify_one();
+    mcp_enabled
 }
 fn report_error(app: &tauri::AppHandle, error: &CoreError) {
     let _ = app.emit("desktop://error", error);
@@ -179,8 +183,7 @@ async fn execute(app: tauri::AppHandle, command: CoreCommand) -> Result<CommandR
         "command",
         json!({"type":operation,"requestId":receipt.request_id,"revision":receipt.revision,"status":receipt.status}),
     );
-    publish(&app, &host.core, &host.desktop, &host.wake);
-    let enabled = host.core.snapshot().preferences.mcp_enabled;
+    let enabled = publish(&app, &host.core, &host.desktop, &host.wake);
     if !host.quitting.load(Ordering::SeqCst)
         && let Err(error) = host.gateway.set_enabled(enabled).await
     {
@@ -318,7 +321,11 @@ fn request_quit(app: tauri::AppHandle) {
             let _ = host.desktop.notify("DitaList 无法退出", &error.message);
             return;
         }
+        // Drain an in-flight tick before teardown; never wait for its retry deadline.
+        let tick_guard = host.tick_gate.lock().await;
         host.exiting.store(true, Ordering::SeqCst);
+        host.wake.notify_one();
+        drop(tick_guard);
         log_event(&host.data_dir, "exit", Value::Null);
         host.desktop.shutdown();
         app.exit(0);
@@ -493,25 +500,46 @@ fn main() {
             let desktop=Arc::new(Desktop::start(app.handle().clone(),tx).map_err(std::io::Error::other)?);
             let wake=Arc::new(tokio::sync::Notify::new());
             let a=app.handle().clone(); let c=core.clone();let d=desktop.clone();let n=wake.clone();
-            let changed=Arc::new(move ||publish(&a,&c,&d,&n));
+            let changed=Arc::new(move || { publish(&a,&c,&d,&n); });
             let a=app.handle().clone();let status=Arc::new(move|info:McpInfo|{let _=a.emit("mcp://state",info);});
             let gateway=Gateway::new(core.clone(),&data_dir,changed,status);
-            app.manage(Host {core:core.clone(),desktop:desktop.clone(),gateway:gateway.clone(),draft:Mutex::new(QuickDraft{text:String::new(),request_id:None}),wake:wake.clone(),exiting:AtomicBool::new(false),data_dir:data_dir.clone(),local:Arc::new(LocalBarrier::default()),quitting:AtomicBool::new(false),handoff:ExitHandoff::default()});
+            app.manage(Host {core:core.clone(),desktop:desktop.clone(),gateway:gateway.clone(),draft:Mutex::new(QuickDraft{text:String::new(),request_id:None}),wake:wake.clone(),exiting:AtomicBool::new(false),data_dir:data_dir.clone(),local:Arc::new(LocalBarrier::default()),quitting:AtomicBool::new(false),handoff:ExitHandoff::default(),tick_gate:tokio::sync::Mutex::new(())});
             desktop.update(core.snapshot());
             log_event(&data_dir,"started",json!({"profile":"preview","baseline":"1d51ac981db7ea1db0266a58ea72908dba698b7e"}));
             let handle=app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 if let Err(error)=gateway.set_enabled(core.snapshot().preferences.mcp_enabled).await {gateway.mark_error();report_error(&handle,&error);}
+                let mut retry = retry_backoff::TickRetry::default();
                 loop {
-                    let delay=core.next_wake_ms();
-                    match delay {Some(ms)=>{tokio::select!{_=wake.notified()=>{},_=tokio::time::sleep(std::time::Duration::from_millis(ms.max(10)))=>{}}},None=>wake.notified().await}
                     if handle.state::<Host>().exiting.load(Ordering::SeqCst) {break}
+                    let delay = retry.delay(std::time::Instant::now(), core.next_wake_ms());
+                    match delay {
+                        Some(delay) => {tokio::select!{_=wake.notified()=>{},_=tokio::time::sleep(delay)=>{}}},
+                        None => wake.notified().await,
+                    }
+                    let host = handle.state::<Host>();
+                    let _tick_guard = host.tick_gate.lock().await;
+                    if host.exiting.load(Ordering::SeqCst) {break}
+                    // Wake notifications may publish other work, but cannot bypass backoff.
+                    if !retry.ready(std::time::Instant::now()) {continue}
                     match core.tick() {
-                        Ok(effects) if !effects.is_empty()=> {
-                            for effect in effects {if let CoreEffect::FocusCompleted(title)=effect {let _=desktop.notify("专注完成",&title);}}
-                            let snapshot=core.snapshot();desktop.update(snapshot.clone());let _=handle.emit("core://changed",snapshot);
+                        Ok(effects) => {
+                            if let Some(suppressed) = retry.succeeded() {
+                                log_event(&host.data_dir, "tick_recovered", json!({"suppressedErrors":suppressed}));
+                            }
+                            if !effects.is_empty() {
+                                for effect in effects {if let CoreEffect::FocusCompleted(title)=effect {let _=desktop.notify("专注完成",&title);}}
+                                let snapshot=core.snapshot();desktop.update(snapshot.clone());let _=handle.emit("core://changed",snapshot);
+                            }
                         },
-                        Ok(_)=>{},Err(error)=>report_error(&handle,&error),
+                        Err(error) => {
+                            if let Some(suppressed) = retry.failed(std::time::Instant::now(), &error.code, &error.message) {
+                                report_error(&handle, &error);
+                                if suppressed > 0 {
+                                    log_event(&host.data_dir, "tick_errors_merged", json!({"suppressedErrors":suppressed}));
+                                }
+                            }
+                        },
                     }
                 }
             });
